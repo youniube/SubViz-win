@@ -103,12 +103,18 @@ jobs:
           cp server.js package.json README.md SubViz.bat SubViz.sh dist/
           if [[ -f subviz.js ]]; then cp subviz.js dist/; fi
           if [[ -d assets ]]; then cp -r assets dist/assets; fi
-          cp -r lib/* dist/lib/
-          cp -r public/* dist/public/
-          cp -r src dist/src
-          cp -r tools dist/tools
-          cp -r test dist/test
+
+          # 关键修复：复制目录“内容”，不要把 src 再套一层到 dist/src/src。
+          cp -r lib/. dist/lib/
+          cp -r public/. dist/public/
+          cp -r src/. dist/src/
+          cp -r tools/. dist/tools/
+          if [[ -d data ]]; then cp -r data/. dist/data/; fi
+          if [[ -d test ]]; then cp -r test/. dist/test/; fi
           touch dist/data/.gitkeep
+
+          echo 'dist layout preview:'
+          find dist -maxdepth 3 -type f | sort | sed -n '1,160p'
 
       - name: Verify release layout
         run: node tools/verify-release-layout.js dist
