@@ -1,6 +1,6 @@
 {
   "name": "subviz-node",
-  "version": "0.2.0",
+  "version": "1.0.4",
   "private": true,
   "description": "SubViz standalone local subscription analyzer powered by Node.js and mihomo.",
   "main": "server.js",
