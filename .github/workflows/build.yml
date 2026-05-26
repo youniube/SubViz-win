@@ -3,12 +3,8 @@ name: Build SubViz Release
 on:
   push:
     branches:
-      - '**'
-    tags:
-      - 'v*'
-
-  release:
-    types: [published]
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,7 +14,7 @@ defaults:
     shell: bash
 
 concurrency:
-  group: subviz-release-${{ github.ref }}
+  group: subviz-release-main
   cancel-in-progress: false
 
 jobs:
@@ -31,58 +27,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve release metadata
-        id: meta
-        run: |
-          set -euo pipefail
-
-          event_name='${{ github.event_name }}'
-          ref_name='${{ github.ref_name }}'
-          release_tag=''
-
-          if [[ "$event_name" == 'release' ]]; then
-            release_tag='${{ github.event.release.tag_name }}'
-          elif [[ '${{ github.ref }}' == refs/tags/v* ]]; then
-            release_tag="$ref_name"
-          else
-            if [[ -f RELEASE_VERSION.txt ]]; then
-              raw_version="$(tr -d '[:space:]' < RELEASE_VERSION.txt)"
-            else
-              raw_version="$(node -p "require('./package.json').version")"
-            fi
-
-            if [[ -z "$raw_version" ]]; then
-              echo '::error::没有找到发布版本号。请创建 RELEASE_VERSION.txt，例如内容为 1.0.4。'
-              exit 1
-            fi
-
-            if [[ "$raw_version" == v* ]]; then
-              release_tag="$raw_version"
-            else
-              release_tag="v$raw_version"
-            fi
-          fi
-
-          if [[ ! "$release_tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
-            echo "::error::发布版本号格式不正确：$release_tag。请使用类似 v1.0.4 的格式。"
-            exit 1
-          fi
-
-          zip_name="SubViz-windows-x64-${release_tag}.zip"
-
-          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
-
-          echo "event_name=$event_name"
-          echo "github_ref=${{ github.ref }}"
-          echo "github_ref_name=$ref_name"
-          echo "release_tag=$release_tag"
-          echo "zip_name=$zip_name"
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Resolve release version
+        id: meta
+        run: |
+          set -euo pipefail
+
+          if [[ -f RELEASE_VERSION.txt ]]; then
+            raw_version="$(tr -d '[:space:]' < RELEASE_VERSION.txt)"
+          else
+            raw_version="$(node -p "require('./package.json').version")"
+          fi
+
+          if [[ -z "$raw_version" ]]; then
+            echo '::error::RELEASE_VERSION.txt 为空，请填写类似 1.0.5 的版本号。'
+            exit 1
+          fi
+
+          if [[ "$raw_version" == v* ]]; then
+            tag="$raw_version"
+          else
+            tag="v$raw_version"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::版本号格式不正确：$tag。请使用类似 v1.0.5 的格式。"
+            exit 1
+          fi
+
+          zip_name="SubViz-windows-x64-${tag}.zip"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+          echo "release tag: $tag"
+          echo "zip name: $zip_name"
 
       - name: Run tests
         run: npm test
@@ -103,7 +84,7 @@ jobs:
           asset_url="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name | test("mihomo-windows-amd64.*\\.zip$")) | .browser_download_url' | head -n 1)"
 
           if [[ -z "$asset_url" || "$asset_url" == 'null' ]]; then
-            echo '::error::未找到 mihomo windows amd64 zip 资产'
+            echo '::error::未找到 mihomo windows amd64 zip 资产。当前最新 release 资产如下：'
             printf '%s' "$release_json" | jq -r '.assets[].name'
             exit 1
           fi
@@ -118,8 +99,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/lib dist/public dist/data dist/mihomo dist/src dist/tools dist/test
+
           cp server.js package.json README.md SubViz.bat SubViz.sh dist/
           if [[ -f subviz.js ]]; then cp subviz.js dist/; fi
+          if [[ -d assets ]]; then cp -r assets dist/assets; fi
           cp -r lib/* dist/lib/
           cp -r public/* dist/public/
           cp -r src dist/src
@@ -139,15 +122,13 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SubViz-windows-x64-${{ steps.meta.outputs.release_tag }}
+          name: SubViz-windows-x64-${{ steps.meta.outputs.tag }}
           path: ${{ steps.meta.outputs.zip_name }}
 
-      - name: Ensure release tag exists
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create tag when missing
         run: |
           set -euo pipefail
-          tag='${{ steps.meta.outputs.release_tag }}'
+          tag='${{ steps.meta.outputs.tag }}'
 
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
             echo "tag ${tag} already exists, keep it unchanged."
@@ -165,7 +146,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag='${{ steps.meta.outputs.release_tag }}'
+          tag='${{ steps.meta.outputs.tag }}'
           zip_name='${{ steps.meta.outputs.zip_name }}'
 
           if gh release view "$tag" >/dev/null 2>&1; then
