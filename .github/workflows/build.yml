@@ -1,86 +1,86 @@
 name: Build SubViz Release
 
 on:
-  # 正常推荐：本地 git push origin v1.0.4 时触发
   push:
     tags:
       - 'v*'
 
-  # 兼容 GitHub 网页端 / API 创建 tag 的场景：有些情况下不会产生 push 事件
-  create:
-
-  # 兼容在 GitHub Releases 页面直接 Publish release 的场景
   release:
     types: [published]
 
-  # 手动构建：可填 v1.0.4；不填则只构建当前选择的分支/标签 artifact
   workflow_dispatch:
     inputs:
       release_tag:
         description: '可选：要发布的 tag，例如 v1.0.4；留空则只构建当前选择的 ref'
         required: false
-        type: string
+        default: ''
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'create' && github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')) ||
-      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     runs-on: ubuntu-latest
 
     steps:
-      - name: Resolve build ref and release tag
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve build metadata
         id: meta
         shell: bash
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
-          tag="${{ github.event.inputs.release_tag || '' }}"
+          tag="${INPUT_RELEASE_TAG:-}"
 
-          if [[ -z "$tag" && "${{ github.event_name }}" == "release" ]]; then
-            tag="${{ github.event.release.tag_name }}"
+          if [[ -z "$tag" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME:-}"
           fi
 
-          if [[ -z "$tag" && "${{ github.event_name }}" == "create" && "${{ github.event.ref_type }}" == "tag" ]]; then
-            tag="${{ github.event.ref }}"
+          if [[ -z "$tag" && -n "${RELEASE_EVENT_TAG:-}" ]]; then
+            tag="$RELEASE_EVENT_TAG"
           fi
 
-          if [[ -z "$tag" && "$GITHUB_REF" == refs/tags/* ]]; then
-            tag="${GITHUB_REF#refs/tags/}"
-          fi
-
-          if [[ -n "$tag" && ! "$tag" =~ ^v[0-9A-Za-z._-]+$ ]]; then
-            echo "::error::release_tag 必须以 v 开头，例如 v1.0.4。当前值：$tag"
-            exit 1
-          fi
-
-          checkout_ref="${tag:-${GITHUB_REF_NAME}}"
           if [[ -n "$tag" ]]; then
+            if [[ ! "$tag" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+              echo "::error::release_tag 必须以 v 开头，例如 v1.0.4。当前值：$tag"
+              exit 1
+            fi
+
+            git fetch --force --tags origin
+
+            if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::远端没有找到 tag：$tag。请先执行 git push origin $tag，或在 GitHub 上创建这个 tag。"
+              echo "当前远端可见的最近 tag："
+              git tag --list 'v*' --sort=-creatordate | head -n 20 || true
+              exit 1
+            fi
+
+            git checkout --force "refs/tags/$tag"
             zip_name="SubViz-windows-x64-${tag}.zip"
           else
-            zip_name="SubViz-windows-x64.zip"
+            zip_name="SubViz-windows-x64-${GITHUB_REF_NAME:-manual}.zip"
           fi
 
+          commit_sha="$(git rev-parse --short HEAD)"
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
 
-          echo "event=${{ github.event_name }}"
-          echo "github_ref=$GITHUB_REF"
-          echo "github_ref_name=$GITHUB_REF_NAME"
-          echo "checkout_ref=$checkout_ref"
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "github_ref=${GITHUB_REF}"
+          echo "github_ref_type=${GITHUB_REF_TYPE:-}"
+          echo "github_ref_name=${GITHUB_REF_NAME:-}"
           echo "release_tag=${tag:-<artifact-only>}"
-          echo "zip_name=$zip_name"
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.meta.outputs.checkout_ref }}
-          fetch-depth: 0
+          echo "build_commit=${commit_sha}"
+          echo "zip_name=${zip_name}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -146,7 +146,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SubViz-windows-x64
+          name: SubViz-windows-x64-${{ steps.meta.outputs.commit_sha }}
           path: ${{ steps.meta.outputs.zip_name }}
 
       - name: Upload Release
