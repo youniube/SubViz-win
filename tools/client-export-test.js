@@ -43,18 +43,22 @@ const nodes = [
   { _sid:'n2', id:'11111111-1111-1111-1111-111111111111', name:'US VLESS Reality', protocol:'vless', server:'reality.example.com', port:'443', network:'tcp', tls:'true', extra:{ type:'vless', server:'reality.example.com', port:'443', uuid:'11111111-1111-1111-1111-111111111111', tls:true, flow:'xtls-rprx-vision', servername:'www.microsoft.com', 'client-fingerprint':'chrome', 'reality-opts':{ 'public-key':'fixture-public-key', 'short-id':'abcd' } } },
   { _sid:'n3', id:'22222222-2222-2222-2222-222222222222', name:'DE VMess gRPC', protocol:'vmess', server:'grpc.example.com', port:'443', network:'grpc', tls:'true', extra:{ type:'vmess', server:'grpc.example.com', port:'443', uuid:'22222222-2222-2222-2222-222222222222', tls:true, network:'grpc', 'grpc-opts':{ 'grpc-service-name':'fixtureGrpc' } } },
   { _sid:'n4', id:'demo-password', name:'JP Hy2', protocol:'hysteria2', server:'hy2.example.com', port:'443', extra:{ type:'hysteria2', server:'hy2.example.com', port:'443', password:'demo-password', sni:'hy2.example.com' } },
-  { _sid:'n5', id:'33333333-3333-3333-3333-333333333333', name:'HK TUIC', protocol:'tuic', server:'tuic.example.com', port:'443', extra:{ type:'tuic', server:'tuic.example.com', port:'443', uuid:'33333333-3333-3333-3333-333333333333', password:'demo-password', sni:'tuic.example.com', alpn:['h3'] } },
+  { _sid:'n5', id:'33333333-3333-3333-3333-333333333333', name:'HK TUIC', protocol:'tuic', server:'tuic.example.com', port:'443', extra:{ type:'tuic', server:'tuic.example.com', port:'443', uuid:'33333333-3333-3333-3333-333333333333', password:'demo-password', sni:'tuic.example.com', alpn:'h3', udp:'1' } },
   { _sid:'n6', id:'demo-psk', name:'GB Snell', protocol:'snell', server:'snell.example.com', port:'44046', extra:{ type:'snell', server:'snell.example.com', port:'44046', psk:'demo-psk', version:'4', obfs:'tls', 'obfs-host':'bing.com' } },
   { _sid:'n7', id:'demo-password', name:'NL AnyTLS', protocol:'anytls', server:'anytls.example.com', port:'443', extra:{ type:'anytls', server:'anytls.example.com', port:'443', password:'demo-password', sni:'anytls.example.com' } }
 ];
 const selected = Object.fromEntries(nodes.map((n) => [n._sid, 1]));
 sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'mihomo');
 const yaml = sandbox.window.__toMihomoYAML();
+assert(/alpn:\n\s+- "h3"/.test(yaml), 'Mihomo export must emit alpn as a YAML list, not a string');
+assert(!/alpn: "h3"/.test(yaml), 'Mihomo export must not quote alpn as a scalar string');
 assert(/ws-opts:\n\s+path: "\/trojan"\n\s+headers:\n\s+Host: "cdn\.example\.com"/.test(yaml), 'Mihomo export did not keep nested ws-opts');
 assert(/grpc-opts:\n\s+grpc-service-name: "fixtureGrpc"/.test(yaml), 'Mihomo export did not keep nested grpc-opts');
 assert(/reality-opts:\n\s+public-key: "fixture-public-key"\n\s+short-id: "abcd"/.test(yaml), 'Mihomo export did not keep nested reality-opts');
 assert(!/ws-opts: "\{/.test(yaml), 'Mihomo export stringified ws-opts as JSON');
 assert(!/grpc-opts: "\{/.test(yaml), 'Mihomo export stringified grpc-opts as JSON');
+assert(/udp: true/.test(yaml), 'Mihomo export must coerce udp string values such as "1" to boolean true');
+assert(!/udp: "1"/.test(yaml), 'Mihomo export must not quote udp as a scalar string');
 
 sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'uri');
 const uris = sandbox.window.__toURIText();
