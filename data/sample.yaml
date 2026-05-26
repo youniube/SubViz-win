@@ -1,0 +1,40 @@
+proxies:
+  - name: "🇸🇬SG_1|demo"
+    type: trojan
+    server: ppg-sg.example.com
+    port: 443
+    password: demo-password
+    network: ws
+    tls: true
+    ws-opts:
+      path: /demo
+      headers:
+        Host: cdn.example.com
+  - name: "🇺🇸US_1|reality-demo"
+    type: vless
+    server: reality.example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    tls: true
+    flow: xtls-rprx-vision
+    servername: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: demo-public-key
+      short-id: demoid
+  - name: "SE_1 demo"
+    type: ss
+    server: 1.2.3.4
+    port: 8388
+    cipher: aes-128-gcm
+    password: demo-password
+  - name: "JP hy2 demo"
+    type: hysteria2
+    server: hy2.example.com
+    port: 443
+    password: demo-password
+    sni: hy2.example.com
+    obfs: salamander
+    obfs-password: demo-obfs
+  - { name: "HK tuic demo", type: tuic, server: tuic.example.com, port: 443, uuid: 00000000-0000-0000-0000-000000000001, password: demo-password, sni: tuic.example.com, alpn: [h3] }
+  - { name: "DE grpc demo", type: vmess, server: grpc.example.com, port: 443, uuid: 00000000-0000-0000-0000-000000000002, tls: true, network: grpc, grpc-opts: { grpc-service-name: demoService } }

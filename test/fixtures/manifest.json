@@ -1,0 +1,102 @@
+{
+  "fixtures": [
+    {
+      "file": "clash-mixed.yaml",
+      "expectedTotal": 10,
+      "protocols": [
+        "trojan",
+        "vless",
+        "vmess",
+        "tuic",
+        "hysteria2",
+        "ss",
+        "snell",
+        "anytls",
+        "socks5",
+        "http"
+      ],
+      "checks": [
+        {
+          "protocol": "vless",
+          "path": "extra.reality-public-key",
+          "equals": "fixture-public-key"
+        },
+        {
+          "protocol": "vmess",
+          "path": "extra.grpc-opts.grpc-service-name",
+          "equals": "fixtureGrpc"
+        },
+        {
+          "protocol": "trojan",
+          "path": "extra.ws-opts.headers.Host",
+          "equals": "cdn.example.com"
+        }
+      ]
+    },
+    {
+      "file": "uri-mixed.txt",
+      "expectedTotal": 10,
+      "protocols": [
+        "ss",
+        "vmess",
+        "vless",
+        "trojan",
+        "hysteria2",
+        "tuic",
+        "snell",
+        "socks5",
+        "http",
+        "anytls"
+      ],
+      "checks": [
+        {
+          "protocol": "vless",
+          "path": "extra.reality-public-key",
+          "equals": "uri-public-key"
+        },
+        {
+          "protocol": "trojan",
+          "path": "extra.path",
+          "equals": "/trojan"
+        },
+        {
+          "protocol": "vmess",
+          "path": "extra.path",
+          "equals": "/vmess"
+        }
+      ]
+    },
+    {
+      "file": "surge-proxy.conf",
+      "expectedTotal": 4,
+      "protocols": [
+        "ss",
+        "trojan",
+        "vless",
+        "vmess"
+      ],
+      "checks": [
+        {
+          "protocol": "vless",
+          "path": "extra.reality-public-key",
+          "equals": "surge-public-key"
+        },
+        {
+          "protocol": "trojan",
+          "path": "extra.path",
+          "equals": "/surge"
+        }
+      ]
+    },
+    {
+      "file": "base64-duplicates.txt",
+      "expectedTotal": 3,
+      "expectedUnique": 2,
+      "expectedDuplicates": 1,
+      "protocols": [
+        "ss",
+        "trojan"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+proxies:
+  - name: "🇸🇬 SG Trojan WS fixture"
+    type: trojan
+    server: trojan-sg.example.com
+    port: 443
+    password: demo-password
+    network: ws
+    tls: true
+    sni: edge.example.com
+    ws-opts:
+      path: /trojan
+      headers:
+        Host: cdn.example.com
+  - name: "🇺🇸 US VLESS Reality fixture"
+    type: vless
+    server: reality-us.example.com
+    port: 443
+    uuid: 11111111-1111-1111-1111-111111111111
+    tls: true
+    flow: xtls-rprx-vision
+    servername: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: fixture-public-key
+      short-id: abcd
+  - { name: "🇩🇪 DE VMess gRPC fixture", type: vmess, server: vmess-de.example.com, port: 443, uuid: 22222222-2222-2222-2222-222222222222, alterId: 0, cipher: auto, tls: true, network: grpc, grpc-opts: { grpc-service-name: fixtureGrpc } }
+  - { name: "🇭🇰 HK TUIC fixture", type: tuic, server: tuic-hk.example.com, port: 443, uuid: 33333333-3333-3333-3333-333333333333, password: demo-password, sni: tuic.example.com, alpn: [h3] }
+  - name: "🇯🇵 JP Hysteria2 fixture"
+    type: hysteria2
+    server: hy2-jp.example.com
+    port: 443
+    password: demo-password
+    sni: hy2.example.com
+    obfs: salamander
+    obfs-password: demo-obfs
+  - name: "🇸🇪 SE SS fixture"
+    type: ss
+    server: ss-se.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: demo-password
+  - name: "🇬🇧 GB Snell fixture"
+    type: snell
+    server: snell-gb.example.com
+    port: 44046
+    psk: demo-psk
+    version: 4
+    obfs: tls
+    obfs-host: bing.com
+  - name: "🇳🇱 NL AnyTLS fixture"
+    type: anytls
+    server: anytls-nl.example.com
+    port: 443
+    password: demo-password
+    sni: anytls.example.com
+  - name: "🇨🇦 CA SOCKS fixture"
+    type: socks5
+    server: socks-ca.example.com
+    port: 1080
+    username: demo-user
+    password: demo-password
+  - name: "🇫🇷 FR HTTP fixture"
+    type: http
+    server: http-fr.example.com
+    port: 8080
+    username: demo-user
+    password: demo-password

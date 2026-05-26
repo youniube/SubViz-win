@@ -1,0 +1,10 @@
+ss://YWVzLTEyOC1nY206ZGVtby1wYXNzd29yZA@ss-uri-sg.example.com:8388#%F0%9F%87%B8%F0%9F%87%AC%20SG%20SS%20URI%20fixture
+vmess://eyJ2IjoiMiIsInBzIjoiXHVkODNjXHVkZGU5XHVkODNjXHVkZGVhIERFIFZNZXNzIFVSSSBmaXh0dXJlIiwiYWRkIjoidm1lc3MtdXJpLWRlLmV4YW1wbGUuY29tIiwicG9ydCI6IjQ0MyIsImlkIjoiNDQ0NDQ0NDQtNDQ0NC00NDQ0LTQ0NDQtNDQ0NDQ0NDQ0NDQ0IiwiYWlkIjoiMCIsInNjeSI6ImF1dG8iLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImNkbi5leGFtcGxlLmNvbSIsInBhdGgiOiIvdm1lc3MiLCJ0bHMiOiJ0bHMiLCJzbmkiOiJ2bWVzcy5leGFtcGxlLmNvbSJ9
+vless://55555555-5555-5555-5555-555555555555@vless-uri-us.example.com:443?encryption=none&security=reality&type=tcp&sni=www.microsoft.com&flow=xtls-rprx-vision&pbk=uri-public-key&sid=beef&fp=chrome#%F0%9F%87%BA%F0%9F%87%B8%20US%20Reality%20URI%20fixture
+trojan://demo-password@trojan-uri-jp.example.com:443?security=tls&type=ws&host=cdn.example.com&path=%2Ftrojan&sni=trojan.example.com#%F0%9F%87%AF%F0%9F%87%B5%20JP%20Trojan%20URI%20fixture
+hysteria2://demo-password@hy2-uri-hk.example.com:443?sni=hy2.example.com&obfs=salamander&obfs-password=demo-obfs#%F0%9F%87%AD%F0%9F%87%B0%20HK%20Hy2%20URI%20fixture
+tuic://66666666-6666-6666-6666-666666666666:demo-password@tuic-uri-gb.example.com:443?sni=tuic.example.com&alpn=h3#%F0%9F%87%AC%F0%9F%87%A7%20GB%20TUIC%20URI%20fixture
+snell://demo-psk@snell-uri-nl.example.com:44046?version=4&obfs=tls&obfs-host=bing.com#%F0%9F%87%B3%F0%9F%87%B1%20NL%20Snell%20URI%20fixture
+socks5://demo-user:demo-password@socks-uri-ca.example.com:1080#%F0%9F%87%A8%F0%9F%87%A6%20CA%20SOCKS%20URI%20fixture
+http://demo-user:demo-password@http-uri-fr.example.com:8080#%F0%9F%87%AB%F0%9F%87%B7%20FR%20HTTP%20URI%20fixture
+anytls://demo-password@anytls-uri-au.example.com:443?security=tls&sni=anytls.example.com#%F0%9F%87%A6%F0%9F%87%BA%20AU%20AnyTLS%20URI%20fixture

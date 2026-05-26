@@ -1,0 +1,26 @@
+#!name=SubViz Surge v0.1.45
+#!desc=Surge 订阅节点可视化分析工具。
+#!category=Subscription
+
+[General]
+force-http-engine-hosts = %APPEND% subviz.store:0
+
+[MITM]
+hostname = %APPEND% subviz.store
+
+[Host]
+subviz.store = 198.18.100.100
+
+[Rule]
+DOMAIN,subviz.store,DIRECT
+
+[Script]
+SubVizText = type=http-request,pattern=^https?:\/\/subviz\.store\/api\/analyze-text(?:\?|$),requires-body=true,max-size=10485760,script-path=https://raw.githubusercontent.com/youniube/subviz/main/subviz.js,script-update-interval=60,timeout=60,debug=false
+
+SubVizLanding = type=http-request,pattern=^https?:\/\/subviz\.store\/api\/landing(?:\?|$),requires-body=true,max-size=10485760,script-path=https://raw.githubusercontent.com/youniube/subviz/main/subviz.js,script-update-interval=60,timeout=90,debug=false,ability=http-client-policy
+
+SubVizAvailability = type=http-request,pattern=^https?:\/\/subviz\.store\/api\/availability(?:\?|$),requires-body=true,max-size=10485760,script-path=https://raw.githubusercontent.com/youniube/subviz/main/subviz.js,script-update-interval=60,timeout=60,debug=false,ability=http-client-policy
+
+SubVizGist = type=http-request,pattern=^https?:\/\/subviz\.store\/api\/(?:gist-upload|gist-token\/(?:save|delete|test))(?:\?|$),requires-body=true,max-size=10485760,script-path=https://raw.githubusercontent.com/youniube/subviz/main/subviz.js,script-update-interval=60,timeout=90,debug=false
+
+SubViz = type=http-request,pattern=^https?:\/\/subviz\.store(?!\/api\/(?:analyze-text|landing|availability|gist-upload|gist-token\/(?:save|delete|test))(?:\?|$))(?:\/|$),requires-body=false,max-size=10485760,script-path=https://raw.githubusercontent.com/youniube/subviz/main/subviz.js,script-update-interval=60,timeout=60,debug=false
