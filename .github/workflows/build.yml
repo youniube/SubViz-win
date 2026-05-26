@@ -1,15 +1,86 @@
 name: Build SubViz Release
 
 on:
+  # 正常推荐：本地 git push origin v1.0.4 时触发
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
+
+  # 兼容 GitHub 网页端 / API 创建 tag 的场景：有些情况下不会产生 push 事件
+  create:
+
+  # 兼容在 GitHub Releases 页面直接 Publish release 的场景
+  release:
+    types: [published]
+
+  # 手动构建：可填 v1.0.4；不填则只构建当前选择的分支/标签 artifact
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '可选：要发布的 tag，例如 v1.0.4；留空则只构建当前选择的 ref'
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'create' && github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')) ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     runs-on: ubuntu-latest
+
     steps:
+      - name: Resolve build ref and release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ github.event.inputs.release_tag || '' }}"
+
+          if [[ -z "$tag" && "${{ github.event_name }}" == "release" ]]; then
+            tag="${{ github.event.release.tag_name }}"
+          fi
+
+          if [[ -z "$tag" && "${{ github.event_name }}" == "create" && "${{ github.event.ref_type }}" == "tag" ]]; then
+            tag="${{ github.event.ref }}"
+          fi
+
+          if [[ -z "$tag" && "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if [[ -n "$tag" && ! "$tag" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "::error::release_tag 必须以 v 开头，例如 v1.0.4。当前值：$tag"
+            exit 1
+          fi
+
+          checkout_ref="${tag:-${GITHUB_REF_NAME}}"
+          if [[ -n "$tag" ]]; then
+            zip_name="SubViz-windows-x64-${tag}.zip"
+          else
+            zip_name="SubViz-windows-x64.zip"
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+
+          echo "event=${{ github.event_name }}"
+          echo "github_ref=$GITHUB_REF"
+          echo "github_ref_name=$GITHUB_REF_NAME"
+          echo "checkout_ref=$checkout_ref"
+          echo "release_tag=${tag:-<artifact-only>}"
+          echo "zip_name=$zip_name"
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.checkout_ref }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -20,25 +91,41 @@ jobs:
         run: npm test
 
       - name: Download Node.js portable
+        shell: bash
         run: |
+          set -euo pipefail
           NODE_VER="v20.18.0"
-          curl -L "https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-win-x64.zip" -o node-win.zip
-          unzip node-win.zip
+          curl -fL "https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-win-x64.zip" -o node-win.zip
+          unzip -q node-win.zip
           mkdir -p dist/node
           cp -r node-${NODE_VER}-win-x64/* dist/node/
 
       - name: Download mihomo Windows x64
+        shell: bash
         run: |
-          MIHOMO_TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
-          curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_TAG}/mihomo-windows-amd64-${MIHOMO_TAG}.zip" -o mihomo.zip || \
-          curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_TAG}/mihomo-windows-amd64-compatible-${MIHOMO_TAG}.zip" -o mihomo.zip
-          unzip mihomo.zip -d dist/mihomo/
+          set -euo pipefail
+          release_json="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest)"
+          asset_url="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name | test("mihomo-windows-amd64.*\\.zip$")) | .browser_download_url' | head -n 1)"
+
+          if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+            echo "::error::未找到 mihomo windows amd64 zip 资产"
+            printf '%s' "$release_json" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          echo "mihomo_asset=$asset_url"
+          curl -fL "$asset_url" -o mihomo.zip
+          unzip -q mihomo.zip -d dist/mihomo/
           find dist/mihomo -iname 'mihomo*.exe' -exec mv {} dist/mihomo/mihomo.exe \; -quit
+          test -f dist/mihomo/mihomo.exe
 
       - name: Assemble release package
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist/lib dist/public dist/data dist/mihomo dist/src dist/tools dist/test
           cp server.js package.json README.md SubViz.bat SubViz.sh dist/
+          if [[ -f subviz.js ]]; then cp subviz.js dist/; fi
           cp -r lib/* dist/lib/
           cp -r public/* dist/public/
           cp -r src dist/src
@@ -46,21 +133,28 @@ jobs:
           cp -r test dist/test
           touch dist/data/.gitkeep
 
+      - name: Verify release layout
+        run: node tools/verify-release-layout.js dist
+
       - name: Create ZIP
+        shell: bash
         run: |
+          set -euo pipefail
           cd dist
-          zip -r ../SubViz-windows-x64.zip .
+          zip -r "../${{ steps.meta.outputs.zip_name }}" .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: SubViz-windows-x64
-          path: SubViz-windows-x64.zip
+          path: ${{ steps.meta.outputs.zip_name }}
 
       - name: Upload Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.meta.outputs.tag != ''
         with:
-          files: SubViz-windows-x64.zip
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: SubViz ${{ steps.meta.outputs.tag }}
+          files: ${{ steps.meta.outputs.zip_name }}
           draft: false
           prerelease: false
