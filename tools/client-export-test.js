@@ -10,12 +10,12 @@ const clientPath = path.join(ROOT, 'src', 'client', 'app.js');
 let code = fs.readFileSync(clientPath, 'utf8');
 const cut = code.indexOf('function aliveErr');
 if (cut < 0) throw new Error('Unable to locate export helper boundary in client app');
-code = code.slice(0, cut) + '\nwindow.__setExportTestData=function(d,s,type){DATA=d;SELECTED=s||{};document.__els.exportType.value=type||"clash";};\nwindow.__toClashYAML=toClashYAML;\nwindow.__toURIText=toURIText;\nwindow.__buildExportPayload=buildExportPayload;\n';
+code = code.slice(0, cut) + '\nwindow.__setExportTestData=function(d,s,type){DATA=d;SELECTED=s||{};document.__els.exportType.value=type||"mihomo";};\nwindow.__toMihomoYAML=toMihomoYAML;\nwindow.__toURIText=toURIText;\nwindow.__toSingBoxJSON=toSingBoxJSON;\nwindow.__buildExportPayload=buildExportPayload;\n';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'Assertion failed'); }
 function makeEl(value) { return { value: value || '', textContent: '', innerHTML: '', checked: false }; }
 const doc = {
-  __els: { status: makeEl(''), exportType: makeEl('clash') },
+  __els: { status: makeEl(''), exportType: makeEl('mihomo') },
   getElementById(id) { if (!this.__els[id]) this.__els[id] = makeEl(''); return this.__els[id]; },
   createElement() { return { style: {}, setAttribute(){}, select(){}, setSelectionRange(){}, click(){}, remove(){}, appendChild(){}, classList:{add(){}} }; },
   body: { appendChild(){} }
@@ -48,13 +48,13 @@ const nodes = [
   { _sid:'n7', id:'demo-password', name:'NL AnyTLS', protocol:'anytls', server:'anytls.example.com', port:'443', extra:{ type:'anytls', server:'anytls.example.com', port:'443', password:'demo-password', sni:'anytls.example.com' } }
 ];
 const selected = Object.fromEntries(nodes.map((n) => [n._sid, 1]));
-sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'clash');
-const yaml = sandbox.window.__toClashYAML();
-assert(/ws-opts:\n\s+path: "\/trojan"\n\s+headers:\n\s+Host: "cdn\.example\.com"/.test(yaml), 'Clash export did not keep nested ws-opts');
-assert(/grpc-opts:\n\s+grpc-service-name: "fixtureGrpc"/.test(yaml), 'Clash export did not keep nested grpc-opts');
-assert(/reality-opts:\n\s+public-key: "fixture-public-key"\n\s+short-id: "abcd"/.test(yaml), 'Clash export did not keep nested reality-opts');
-assert(!/ws-opts: "\{/.test(yaml), 'Clash export stringified ws-opts as JSON');
-assert(!/grpc-opts: "\{/.test(yaml), 'Clash export stringified grpc-opts as JSON');
+sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'mihomo');
+const yaml = sandbox.window.__toMihomoYAML();
+assert(/ws-opts:\n\s+path: "\/trojan"\n\s+headers:\n\s+Host: "cdn\.example\.com"/.test(yaml), 'Mihomo export did not keep nested ws-opts');
+assert(/grpc-opts:\n\s+grpc-service-name: "fixtureGrpc"/.test(yaml), 'Mihomo export did not keep nested grpc-opts');
+assert(/reality-opts:\n\s+public-key: "fixture-public-key"\n\s+short-id: "abcd"/.test(yaml), 'Mihomo export did not keep nested reality-opts');
+assert(!/ws-opts: "\{/.test(yaml), 'Mihomo export stringified ws-opts as JSON');
+assert(!/grpc-opts: "\{/.test(yaml), 'Mihomo export stringified grpc-opts as JSON');
 
 sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'uri');
 const uris = sandbox.window.__toURIText();
@@ -62,9 +62,19 @@ const uris = sandbox.window.__toURIText();
 assert(/vless:\/\/[^\n]+security=reality/.test(uris), 'VLESS Reality URI missing security=reality');
 assert(/pbk=fixture-public-key/.test(uris), 'VLESS Reality URI missing pbk');
 
-sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'json');
-const payload = sandbox.window.__buildExportPayload();
-assert(payload.label.indexOf('JSON') >= 0, 'JSON export payload label missing');
-assert(JSON.parse(payload.text).nodes.length === nodes.length, 'JSON export payload count mismatch');
+sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'mihomo');
+const mihomoPayload = sandbox.window.__buildExportPayload();
+assert(mihomoPayload.label === 'Mihomo YAML', 'Mihomo payload label mismatch');
+assert(mihomoPayload.subStorePath.includes('/ClashMeta?prettyYaml=true'), 'Mihomo Sub-Store path must use ClashMeta with prettyYaml=true');
+assert(mihomoPayload.subStorePath.indexOf('target=') < 0, 'Mihomo Sub-Store path must use path target instead of query target');
+
+sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'singbox');
+const singboxPayload = sandbox.window.__buildExportPayload();
+assert(singboxPayload.label === 'sing-box JSON', 'sing-box payload label mismatch');
+assert(singboxPayload.name.endsWith('.json'), 'sing-box export must use .json extension');
+assert(singboxPayload.subStorePath.includes('/sing-box'), 'sing-box Sub-Store path must use sing-box target');
+const singbox = JSON.parse(singboxPayload.text);
+assert(singbox.outbounds.some((o) => o.type === 'selector'), 'sing-box export missing selector outbound');
+assert(singbox.outbounds.some((o) => o.type === 'vless' && o.tls && o.tls.reality && o.tls.reality.public_key === 'fixture-public-key'), 'sing-box export missing VLESS Reality settings');
 
 console.log('SubViz client export tests passed.');
