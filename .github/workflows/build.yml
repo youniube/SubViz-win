@@ -1,15 +1,12 @@
 name: Build SubViz Release
 
 on:
-  # 网页端上传文件到 main 分支后，自动构建并发布。
-  # 不再依赖 Actions 页面里的 Run workflow，避免 GitHub UI 的 Failed to queue workflow run。
   push:
     branches:
-      - main
+      - '**'
     tags:
       - 'v*'
 
-  # 兼容 GitHub Releases 页面直接 Publish release 的场景。
   release:
     types: [published]
 
@@ -48,7 +45,6 @@ jobs:
           elif [[ '${{ github.ref }}' == refs/tags/v* ]]; then
             release_tag="$ref_name"
           else
-            # 网页端只需要改这个文件，例如写入：1.0.4 或 v1.0.4
             if [[ -f RELEASE_VERSION.txt ]]; then
               raw_version="$(tr -d '[:space:]' < RELEASE_VERSION.txt)"
             else
