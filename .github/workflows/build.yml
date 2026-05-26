@@ -1,0 +1,66 @@
+name: Build SubViz Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run tests
+        run: npm test
+
+      - name: Download Node.js portable
+        run: |
+          NODE_VER="v20.18.0"
+          curl -L "https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-win-x64.zip" -o node-win.zip
+          unzip node-win.zip
+          mkdir -p dist/node
+          cp -r node-${NODE_VER}-win-x64/* dist/node/
+
+      - name: Download mihomo Windows x64
+        run: |
+          MIHOMO_TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
+          curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_TAG}/mihomo-windows-amd64-${MIHOMO_TAG}.zip" -o mihomo.zip || \
+          curl -L "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_TAG}/mihomo-windows-amd64-compatible-${MIHOMO_TAG}.zip" -o mihomo.zip
+          unzip mihomo.zip -d dist/mihomo/
+          find dist/mihomo -iname 'mihomo*.exe' -exec mv {} dist/mihomo/mihomo.exe \; -quit
+
+      - name: Assemble release package
+        run: |
+          mkdir -p dist/lib dist/public dist/data dist/mihomo dist/src dist/tools dist/test
+          cp server.js package.json README.md SubViz.bat SubViz.sh dist/
+          cp -r lib/* dist/lib/
+          cp -r public/* dist/public/
+          cp -r src dist/src
+          cp -r tools dist/tools
+          cp -r test dist/test
+          touch dist/data/.gitkeep
+
+      - name: Create ZIP
+        run: |
+          cd dist
+          zip -r ../SubViz-windows-x64.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SubViz-windows-x64
+          path: SubViz-windows-x64.zip
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: SubViz-windows-x64.zip
+          draft: false
+          prerelease: false
