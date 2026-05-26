@@ -98,6 +98,7 @@ async function parseAndInject(text, sourceUrl, mihomo) {
   if (!result.summary || !result.summary.total) result.warning = 'subscription parsed, but no proxy nodes were found';
   if (mihomo && result.nodes && result.nodes.length) {
     result.mihomo = await mihomo.injectNodes(result.nodes).catch(e => ({ ok: false, error: String(e && e.message || e) }));
+    if (result.mihomo && result.mihomo.diagnostics) result.mihomoDiagnostics = result.mihomo.diagnostics;
   }
   return result;
 }
@@ -107,6 +108,10 @@ async function routeAPI(req, res, ctx, url) {
   const p = url.pathname;
   if (req.method === 'GET' && p === '/api/health') {
     const ready = await mihomo.isReady();
+    let inventory = null;
+    if (ready) {
+      inventory = await mihomo.getProxyInventory(1000).catch(() => null);
+    }
     return sendJSON(res, {
       ok: true,
       name: 'SubViz',
@@ -116,9 +121,16 @@ async function routeAPI(req, res, ctx, url) {
       mihomo: {
         ready,
         error: ready ? '' : (mihomo.lastError || ''),
+        controller: mihomo.controllerBaseURL ? mihomo.controllerBaseURL() : ('http://' + (mihomo.host || '127.0.0.1') + ':' + (mihomo.apiPort || 19090)),
         ports: { mixed: mihomo.mixedPort, socks: mihomo.socksPort, http: mihomo.httpPort, api: mihomo.apiPort },
+        proxies: inventory ? { total: inventory.total, nodeCount: inventory.nodeCount } : null,
       },
     });
+  }
+
+  if (req.method === 'GET' && p === '/api/mihomo-debug') {
+    const debug = mihomo.describeController ? await mihomo.describeController().catch(e => ({ ok: false, error: String(e && e.message || e) })) : { ok: false, error: 'mihomo debug is not available for this manager' };
+    return sendJSON(res, debug, debug.ok === false ? 502 : 200);
   }
 
   if (req.method === 'GET' && p === '/api/sample') {
@@ -180,8 +192,9 @@ async function routeAPI(req, res, ctx, url) {
         retries: parseInteger(url.searchParams.get('retries') || body.retries, 1, 0, 3),
         retryDelay: parseInteger(url.searchParams.get('retry_delay') || body.retryDelay, 1000, 0, 5000),
       });
-      return sendJSON(res, r, r.ok ? 200 : 502);
-    } catch (e) { return sendJSON(res, { ok: false, alive: false, error: String(e && e.message || e) }, e.statusCode || 500); }
+      const statusCode = (r.ok || r.shouldCountAsDead === false) ? 200 : 502;
+      return sendJSON(res, r, statusCode);
+    } catch (e) { return sendJSON(res, { ok: false, alive: false, category: 'api_error', shouldCountAsDead: true, error: String(e && e.message || e), statusCode: e.statusCode || e.status || 0 }, e.statusCode || 500); }
   }
 
   if (req.method === 'GET' && p === '/api/gist-token/status') {

@@ -33,7 +33,7 @@ function recalc(d){var ns=d.nodes||[],byP={},byC={},byCC={},byF={},seen={},dups=
 function render(d){var isNew=(d!==DATA);if(isNew)SELECTED={};(d.nodes||[]).forEach(function(n,i){if(!n._sid)n._sid='sv_'+i;if(!n.originalName)n.originalName=n.name});DATA=recalc(d);var s=DATA.summary||{};var labels=['总节点','唯一节点','重复节点','协议数','国家/地区'];var vals=[s.total,s.unique,s.duplicates,s.protocols,s.countries];$('cards').innerHTML=labels.map(function(l,i){return '<div class="stat"><span class="muted">'+l+'</span><b>'+(vals[i]||0)+'</b></div>'}).join('');var p=DATA.stats.byProtocol||[],c=DATA.stats.byCountry||[];$('protocols').innerHTML=p.length?p.map(function(x){return bar(x,p[0].count)}).join(''):'暂无数据';$('countries').innerHTML=c.length?c.slice(0,30).map(function(x){return bar(x,c[0].count)}).join(''):'暂无数据';fillSelect('pf',p);fillSelect('cf',c);apply();emit('afterRender',DATA)}
 function fillSelect(id,arr){var old=$(id).value;$(id).innerHTML='<option value="">'+(id=='pf'?'全部协议':'全部地区')+'</option>'+(arr||[]).map(function(x){return '<option value="'+esc(x.key)+'">'+esc(x.key)+' ('+x.count+')</option>'}).join('');$(id).value=old}
 function filtered(){if(!DATA)return[];var ns=$('unique').checked?uniq(DATA.nodes):DATA.nodes;var q=$('q').value.toLowerCase(),pf=$('pf').value,cf=$('cf').value;return ns.filter(function(n){return(!pf||n.protocol==pf)&&(!cf||n.country==cf)&&(!q||(String(n.name)+String(n.server)+String(n.country)+String(n.protocol)+String(n.port)).toLowerCase().indexOf(q)>=0)})}
-function meta(n){var a=[];if(n.country)a.push(esc(n.country));if(n.network)a.push(esc(n.network));if(String(n.tls)==='true')a.push('TLS');if(n.geoCity)a.push(esc(n.geoCity));if(n.aliveOK===true)a.push('可用 '+esc(String(n.aliveLatency))+'ms');else if(n.aliveOK===false)a.push('不可用:'+esc(aliveErr(n.aliveError)));if(n.landingError)a.push('失败:'+esc(zhErr(n.landingError)));return a.join(' \u00b7 ')}
+function meta(n){var a=[];if(n.country)a.push(esc(n.country));if(n.network)a.push(esc(n.network));if(String(n.tls)==='true')a.push('TLS');if(n.geoCity)a.push(esc(n.geoCity));if(n.aliveOK===true)a.push('可用 '+esc(String(n.aliveLatency))+'ms');else if(aliveIsApiMissing(n))a.push('API未找到:'+esc(aliveErr(n.aliveError)));else if(n.aliveOK===false)a.push('真实不可用:'+esc(aliveErr(n.aliveError)));else if(n.aliveCategory)a.push(esc(aliveCategoryLabel(n.aliveCategory))+':'+esc(aliveErr(n.aliveError)));if(n.landingError)a.push('失败:'+esc(zhErr(n.landingError)));return a.join(' \u00b7 ')}
 function apply(){var a=filtered(),sc=selectedCount();$('count').textContent='当前显示 '+a.length+' / '+((DATA&&DATA.summary&&DATA.summary.total)||0)+' 个节点，已选 '+sc+' 个';updateSelectUI();$('tbody').innerHTML=a.map(function(n,i){var chk=SELECTED[n._sid]?' checked':'';return '<tr><td><input type="checkbox" class="rowchk" data-sid="'+esc(n._sid||'')+'" onchange="window.toggleSelect&&window.toggleSelect(this.dataset.sid,this.checked)"'+chk+'></td><td>'+(i+1)+'</td><td>'+esc(n.name)+'<div class="small">'+meta(n)+'</div></td><td><span class="tag">'+esc(n.protocol)+'</span></td><td>'+esc(n.server)+'</td><td>'+esc(n.port)+'</td></tr>'}).join('')||'<tr><td colspan="6" class="muted">暂无数据</td></tr>';emit('afterApply',a)}
 function loadJSON(url,opt){return fetch(url,opt).then(function(r){return r.text().then(function(t){return{status:r.status,ok:r.ok,text:t}})}).then(function(o){try{var j=JSON.parse(o.text);return j}catch(e){throw new Error(!o.ok?'HTTP '+o.status+': '+o.text.slice(0,150):(o.text.slice(0,200)||String(e)))}})}
 function analyzeURL(){var u=$('url').value.trim();if(!u){st('请先输入订阅 URL');return}st('按钮已触发，正在拉取分析…');loadJSON('/api/analyze?url='+encodeURIComponent(u)+'&t='+Date.now()).then(function(d){if(!d.ok)throw new Error(d.error||'error');render(d);st('分析完成：'+d.summary.total+' 个节点')}).catch(function(e){st('失败：'+e.message)})}
@@ -72,7 +72,7 @@ function isBoolKey(k){return /^(tls|udp|skip-cert-verify|allow-insecure|insecure
 function isNumKey(k){return /^(port|alterId|alterid|aid|up|down|mtu|recv-window|recv_window|hop-interval|hop_interval|download-bandwidth|upload-bandwidth)$/i.test(String(k||''))}
 function yval(v,k){if(v===true||v===false)return String(v);if(v===null||v===undefined||v==='')return '""';var s=String(v);if(isBoolKey(k)&&/^(true|false)$/i.test(s))return s.toLowerCase();if(isNumKey(k)&&/^[-+]?\d+(\.\d+)?$/.test(s))return s;return qyaml(s)}
 function deepClone(v){if(v===undefined||typeof v==='function')return undefined;if(Array.isArray(v))return v.map(deepClone).filter(function(x){return x!==undefined});if(v&&typeof v==='object'){var r={};Object.keys(v).forEach(function(k){var x=deepClone(v[k]);if(x!==undefined)r[k]=x});return r}return v}
-function clone(o){var r={},drop={raw:1,extra:1,fingerprint:1,_sid:1,originalName:1,rawName:1,nameBeforeAlive:1,aliveOK:1,aliveLatency:1,aliveStatus:1,aliveError:1,landingError:1,geoProvider:1,geoQuery:1,geoCity:1,geoRegion:1,geoISP:1,geoASN:1,country:1,countryCode:1,countrySource:1,countryConfidence:1,sourceFormat:1};o=o||{};Object.keys(o).forEach(function(k){if(drop[k]||o[k]===undefined)return;var v=deepClone(o[k]);if(v!==undefined)r[k]=v});return r}
+function clone(o){var r={},drop={raw:1,extra:1,fingerprint:1,_sid:1,originalName:1,rawName:1,nameBeforeAlive:1,aliveOK:1,aliveLatency:1,aliveStatus:1,aliveError:1,aliveCategory:1,aliveStatusCode:1,aliveErrorRaw:1,mihomoApiName:1,aliveRequestUrl:1,landingError:1,geoProvider:1,geoQuery:1,geoCity:1,geoRegion:1,geoISP:1,geoASN:1,country:1,countryCode:1,countrySource:1,countryConfidence:1,sourceFormat:1};o=o||{};Object.keys(o).forEach(function(k){if(drop[k]||o[k]===undefined)return;var v=deepClone(o[k]);if(v!==undefined)r[k]=v});return r}
 function firstNonEmpty(){for(var i=0;i<arguments.length;i++){var v=arguments[i];if(v!==null&&v!==undefined&&String(v)!=='')return v}return ''}
 function pruneEmpty(v){if(Array.isArray(v)){for(var i=v.length-1;i>=0;i--){var x=pruneEmpty(v[i]);if(x===undefined)v.splice(i,1);else v[i]=x}return v.length?v:undefined}if(v&&typeof v==='object'){Object.keys(v).forEach(function(k){var x=pruneEmpty(v[k]);if(x===undefined)delete v[k];else v[k]=x});return Object.keys(v).length?v:undefined}if(v===undefined||v===null||v==='')return undefined;return v}
 function getWSPath(e){return firstNonEmpty(e.path,e['ws-path'],e['ws-opts']&&e['ws-opts'].path)}
@@ -112,7 +112,12 @@ function fallbackCopy(txt){var ta=document.createElement('textarea');ta.value=tx
 window.copyExport=function copyExport(){try{var p=buildExportPayload();var done=function(){st('已复制 '+p.label+' 到剪贴板'+(p.count!=null?'：'+p.count+' 个节点':''))};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(p.text).then(done).catch(function(){if(fallbackCopy(p.text))done();else st('复制失败：请改用导出文件')})}else{if(fallbackCopy(p.text))done();else st('复制失败：当前浏览器不允许写入剪贴板')}}catch(e){st('复制失败：'+e.message)}}
 
 
-function aliveErr(s){s=String(s||'');var l=s.toLowerCase();if(!s)return '检测失败';if(l.indexOf('timeout')>=0||s.indexOf('超时')>=0)return '请求超时：节点无响应、速度过慢，或当前检测超时设置偏短';if(l.indexOf('connection refused')>=0)return '连接被拒绝：服务器端口关闭、节点失效，或服务端主动拒绝';if(l.indexOf('websocket closed')>=0)return 'WebSocket 被关闭：常见原因是 Host/SNI/path 不匹配、CDN 回源拒绝，或节点已失效';if(l.indexOf('load failed')>=0)return '连接失败：节点不可达、TLS/握手失败，或当前网络阻断';if(s.indexOf('状态码不匹配')>=0)return s;if(l.indexOf('mihomo proxy descriptor')>=0||s.indexOf('临时代理策略')>=0)return 'mihomo 临时代理策略创建失败';if(l.indexOf('unsupported')>=0||s.indexOf('不支持')>=0)return '当前协议不支持测活';return s}
+function aliveErr(s){s=String(s||'');var l=s.toLowerCase();if(!s)return '检测失败';if(l.indexOf('mihomo api 未找到')>=0||l.indexOf('api_not_found')>=0||l.indexOf('proxy name not found')>=0||l.indexOf('http 404')>=0)return 'Mihomo API 未找到该节点 / 节点未加载 / 名称不匹配';if(l.indexOf('timeout')>=0||s.indexOf('超时')>=0)return '请求超时：节点无响应、速度过慢，或当前检测超时设置偏短';if(l.indexOf('connection refused')>=0)return '连接被拒绝：服务器端口关闭、节点失效，或服务端主动拒绝';if(l.indexOf('websocket closed')>=0)return 'WebSocket 被关闭：常见原因是 Host/SNI/path 不匹配、CDN 回源拒绝，或节点已失效';if(l.indexOf('load failed')>=0)return '连接失败：节点不可达、TLS/握手失败，或当前网络阻断';if(s.indexOf('状态码不匹配')>=0)return s;if(l.indexOf('mihomo proxy descriptor')>=0||s.indexOf('临时代理策略')>=0)return 'mihomo 临时代理策略创建失败';if(l.indexOf('unsupported')>=0||s.indexOf('不支持')>=0)return '当前协议不支持测活';return s}
+function aliveCategoryLabel(c){c=String(c||'');if(c==='available')return '可用';if(c==='unavailable')return '真实不可用';if(c==='api_not_found')return 'API未找到';if(c==='not_loaded')return '未加载到内核';if(c==='timeout')return '测速超时';if(c==='api_error')return 'Mihomo API错误';if(c==='unknown_error')return '未知错误';return c||'未知'}
+function aliveCategoryFromResponse(r,er){var c=String((r&&r.category)||'');var msg=String((r&&(r.error||r.rawError))||er||'').toLowerCase();var code=Number((r&&r.statusCode)||0);if(c)return c;if(code===404||msg.indexOf('http 404')>=0||msg.indexOf('not found')>=0)return 'api_not_found';if(msg.indexOf('timeout')>=0||msg.indexOf('超时')>=0)return 'timeout';if(code===503||msg.indexOf('http 503')>=0)return 'unavailable';if(code)return 'api_error';return 'unknown_error'}
+function aliveFailureIsApiMissing(c){c=String(c||'');return c==='api_not_found'||c==='not_loaded'||c==='proxy_not_found'}
+function aliveIsApiMissing(n){return !!(n&&aliveFailureIsApiMissing(n.aliveCategory))}
+function aliveIsTrueDead(n){return !!(n&&n.aliveOK===false&&!aliveIsApiMissing(n))}
 function cfgVal(id,def){var el=$(id);var v=el?String(el.value==null?'':el.value).trim():'';return v?v:String(def==null?'':def)}
 function cfgChecked(id){var el=$(id);return !!(el&&el.checked)}
 function cfgInt(id,def,min,max){var raw=cfgVal(id,def),n=parseInt(raw,10);if(!isFinite(n)||n<min||n>max)n=def;return Math.max(min,Math.min(max,n))}
@@ -418,38 +423,60 @@ function sv133InstallStyle(){
       if(!nodes.length) return;
       var cfg=getAliveSettings(), q=aliveQS(cfg);
       GEO_RUNNING=true;
-      var total=nodes.length, done=0, ok=0, fail=0, errMap={};
+      var total=nodes.length, done=0, ok=0, trueFail=0, timeoutFail=0, apiMiss=0, errMap={};
       st('开始对选中的 '+total+' 个节点测活：并发 '+cfg.concurrency+'，超时 '+cfg.timeout+'ms，0 / '+total);
+      function trueDead(){return trueFail+timeoutFail}
+      function recordFailure(n,r,fallback){
+        var cat=aliveCategoryFromResponse(r,fallback);
+        var er=aliveErr((r&&(r.error||r.rawError))||fallback||'检测失败');
+        n.aliveCategory=cat;
+        n.aliveError=er;
+        n.aliveErrorRaw=(r&&r.rawError)||fallback||'';
+        n.aliveStatusCode=(r&&r.statusCode)||0;
+        n.mihomoApiName=(r&&r.mihomoApiName)||n.mihomoApiName||'';
+        n.aliveRequestUrl=(r&&r.requestUrl)||n.aliveRequestUrl||'';
+        if(aliveFailureIsApiMissing(cat)||(r&&r.shouldCountAsDead===false)){
+          n.aliveOK=null;
+          apiMiss++;
+        }else{
+          n.aliveOK=false;
+          if(cat==='timeout')timeoutFail++;else trueFail++;
+        }
+        errMap[er]=(errMap[er]||0)+1;
+      }
       function finish(){
         GEO_RUNNING=false;
         var autoCount=sv133AutoPick(nodes);
         recalc(DATA);
         render(DATA);
         sv133Refine();
-        var es=Object.keys(errMap).slice(0,3).map(function(k){return k+'×'+errMap[k]}).join('；');
-        st('测活完成：已检测选中的 '+total+' 个节点，实际按 '+cfg.concurrency+' 并发调度，超时 '+cfg.timeout+'ms，可用 '+ok+'，不可用 '+fail+(sv133AutoEnabled()?'。已自动勾选可用节点 '+autoCount+' 个':'')+(es?'。失败原因：'+es:''));
+        var es=Object.keys(errMap).slice(0,4).map(function(k){return k+'×'+errMap[k]}).join('；');
+        st('测活完成：已检测选中的 '+total+' 个节点，实际按 '+cfg.concurrency+' 并发调度，超时 '+cfg.timeout+'ms，可用 '+ok+'，真实不可用 '+trueDead()+'，API未找到/未加载 '+apiMiss+(sv133AutoEnabled()?'。已自动勾选可用节点 '+autoCount+' 个':'')+(es?'。失败原因：'+es:''));
       }
       runLimitedTasks(nodes,cfg.concurrency,function(n){
         return loadJSON('/api/availability?t='+Date.now()+q,{method:'POST',body:JSON.stringify(n),headers:{'Content-Type':'application/json;charset=utf-8'}})
           .then(function(r){
             if(r&&r.ok&&r.alive){
               n.aliveOK=true;
+              n.aliveCategory='available';
               n.aliveLatency=r.latency||r.totalLatency||0;
               n.aliveStatus=r.status;
+              n.aliveStatusCode=r.statusCode||200;
+              n.mihomoApiName=r.mihomoApiName||'';
+              n.aliveRequestUrl=r.requestUrl||'';
               n.aliveError='';
+              n.aliveErrorRaw='';
               applyAliveName(n,cfg);
               ok++;
             }else{
-              var er=aliveErr((r&&r.error)||'检测失败');
-              n.aliveOK=false; n.aliveError=er; errMap[er]=(errMap[er]||0)+1; fail++;
+              recordFailure(n,r,'检测失败');
             }
           })
           .catch(function(e){
-            var er=aliveErr(e.message||String(e));
-            n.aliveOK=false; n.aliveError=er; errMap[er]=(errMap[er]||0)+1; fail++;
+            recordFailure(n,null,e.message||String(e));
           });
       },function(_n,_i,_err,d,t){
-        if(d){done=d;recalc(DATA);apply();st('测活：'+done+' / '+t+'，并发 '+cfg.concurrency+'，可用 '+ok+'，不可用 '+fail)}
+        if(d){done=d;recalc(DATA);apply();st('测活：'+done+' / '+t+'，并发 '+cfg.concurrency+'，可用 '+ok+'，真实不可用 '+trueDead()+'，API未找到/未加载 '+apiMiss)}
       },finish);
     }catch(e){GEO_RUNNING=false;st('测活启动失败：'+aliveErr(e&&e.message?e.message:String(e)))}
   };
@@ -514,12 +541,12 @@ function sv135AddTitle(id,text,before){
     if(p&&c&&!sv135ById('sv135Charts')){
       var grid=document.createElement('div');grid.id='sv135Charts';grid.className='sv135-chart-grid';
       p.parentNode.insertBefore(grid,p);grid.appendChild(p);grid.appendChild(c);
-      var h=document.createElement('div');h.id='sv135Health';h.className='card';h.innerHTML='<h2>节点健康状况</h2><div class="health-grid"><div class="health-cell"><span>可用</span><b id="hAlive">0</b></div><div class="health-cell"><span>不可用</span><b id="hDead">0</b></div><div class="health-cell"><span>未测</span><b id="hUntested">0</b></div><div class="health-cell"><span>当前筛选</span><b id="hScope">0</b></div></div><div id="hBars" class="small muted">测活后这里会显示可用比例。</div>';
+      var h=document.createElement('div');h.id='sv135Health';h.className='card';h.innerHTML='<h2>节点健康状况</h2><div class="health-grid"><div class="health-cell"><span>可用</span><b id="hAlive">0</b></div><div class="health-cell"><span>真实不可用</span><b id="hDead">0</b></div><div class="health-cell"><span>API未找到</span><b id="hUntested">0</b></div><div class="health-cell"><span>当前筛选</span><b id="hScope">0</b></div></div><div id="hBars" class="small muted">测活后这里会显示可用比例。</div>';
       grid.appendChild(h);
     }
   }
-  function health(nodes){var a=0,d=0,u=0;(nodes||[]).forEach(function(n){if(n.aliveOK===true)a++;else if(n.aliveOK===false)d++;else u++});return{alive:a,dead:d,untested:u,total:(nodes||[]).length}}
-  function sv135UpdateHealth(nodes){sv135EnsureDashboard();var h=health(nodes||filtered());[['hAlive',h.alive],['hDead',h.dead],['hUntested',h.untested],['hScope',h.total]].forEach(function(x){var el=sv135ById(x[0]);if(el)el.textContent=x[1]});var b=sv135ById('hBars');if(b){var p=h.total?Math.round(h.alive/h.total*100):0;b.innerHTML='<div class="bar"><div>可用率</div><div class="track"><div class="fill" style="width:'+p+'%"></div></div><b>'+p+'%</b></div>';}}
+  function health(nodes){var a=0,d=0,u=0,m=0;(nodes||[]).forEach(function(n){if(n.aliveOK===true)a++;else if(aliveIsApiMissing(n))m++;else if(aliveIsTrueDead(n))d++;else u++});return{alive:a,dead:d,apiMissing:m,untested:u,total:(nodes||[]).length}}
+  function sv135UpdateHealth(nodes){sv135EnsureDashboard();var h=health(nodes||filtered());[['hAlive',h.alive],['hDead',h.dead],['hUntested',h.apiMissing||0],['hScope',h.total]].forEach(function(x){var el=sv135ById(x[0]);if(el)el.textContent=x[1]});var b=sv135ById('hBars');if(b){var p=h.total?Math.round(h.alive/h.total*100):0;b.innerHTML='<div class="bar"><div>可用率</div><div class="track"><div class="fill" style="width:'+p+'%"></div></div><b>'+p+'%</b></div>';}}
   function sv135Refine(){
     sv135EnsureDashboard();
     var selectGrid=sv135ById('sv133SelectGrid')||sv135ById('sv132SelectGrid');
@@ -621,10 +648,10 @@ window.addEventListener('DOMContentLoaded',function(){sv135Refine();sv135UpdateH
     document.body.classList.add('sv136');installStyles();
     addMeta('apple-mobile-web-app-capable','yes');addMeta('apple-mobile-web-app-status-bar-style','black-translucent');addMeta('apple-mobile-web-app-title','SubViz');
     var p=closestCard(sv136ById('protocols')),c=closestCard(sv136ById('countries'));
-    if(p&&c&&!sv136ById('sv135Charts')){var grid=document.createElement('div');grid.id='sv135Charts';grid.className='sv135-chart-grid';p.parentNode.insertBefore(grid,p);grid.appendChild(p);grid.appendChild(c);var h=document.createElement('div');h.id='sv135Health';h.className='card';h.innerHTML='<h2>节点健康状况</h2><div class="health-grid"><div class="health-cell"><span>可用</span><b id="hAlive">0</b></div><div class="health-cell"><span>不可用</span><b id="hDead">0</b></div><div class="health-cell"><span>未测</span><b id="hUntested">0</b></div><div class="health-cell"><span>当前筛选</span><b id="hScope">0</b></div></div><div id="hBars" class="small muted">测活后这里会显示可用比例。</div>';grid.appendChild(h)}
+    if(p&&c&&!sv136ById('sv135Charts')){var grid=document.createElement('div');grid.id='sv135Charts';grid.className='sv135-chart-grid';p.parentNode.insertBefore(grid,p);grid.appendChild(p);grid.appendChild(c);var h=document.createElement('div');h.id='sv135Health';h.className='card';h.innerHTML='<h2>节点健康状况</h2><div class="health-grid"><div class="health-cell"><span>可用</span><b id="hAlive">0</b></div><div class="health-cell"><span>真实不可用</span><b id="hDead">0</b></div><div class="health-cell"><span>API未找到</span><b id="hUntested">0</b></div><div class="health-cell"><span>当前筛选</span><b id="hScope">0</b></div></div><div id="hBars" class="small muted">测活后这里会显示可用比例。</div>';grid.appendChild(h)}
   }
-  function health(nodes){var a=0,d=0,u=0;(nodes||[]).forEach(function(n){if(n.aliveOK===true)a++;else if(n.aliveOK===false)d++;else u++});return{alive:a,dead:d,untested:u,total:(nodes||[]).length}}
-  function sv136UpdateHealth(nodes){sv136EnsureDashboard();var h=health(nodes||[]);[['hAlive',h.alive],['hDead',h.dead],['hUntested',h.untested],['hScope',h.total]].forEach(function(x){var el=sv136ById(x[0]);if(el)el.textContent=x[1]});var b=sv136ById('hBars');if(b){var p=h.total?Math.round(h.alive/h.total*100):0;b.innerHTML='<div class="bar"><div>可用率</div><div class="track"><div class="fill" style="width:'+p+'%"></div></div><b>'+p+'%</b></div>'}}
+  function health(nodes){var a=0,d=0,u=0,m=0;(nodes||[]).forEach(function(n){if(n.aliveOK===true)a++;else if(aliveIsApiMissing(n))m++;else if(aliveIsTrueDead(n))d++;else u++});return{alive:a,dead:d,apiMissing:m,untested:u,total:(nodes||[]).length}}
+  function sv136UpdateHealth(nodes){sv136EnsureDashboard();var h=health(nodes||[]);[['hAlive',h.alive],['hDead',h.dead],['hUntested',h.apiMissing||0],['hScope',h.total]].forEach(function(x){var el=sv136ById(x[0]);if(el)el.textContent=x[1]});var b=sv136ById('hBars');if(b){var p=h.total?Math.round(h.alive/h.total*100):0;b.innerHTML='<div class="bar"><div>可用率</div><div class="track"><div class="fill" style="width:'+p+'%"></div></div><b>'+p+'%</b></div>'}}
   function sv136Refine(){
     sv136EnsureDashboard();
     /* Section titles are added by sv135. Keep sv136 focused on visual polish to avoid duplicate labels. */
@@ -823,13 +850,13 @@ function sv137UpdateCharts(){
   if(pc)pc.innerHTML=sv137SetChartTitle(pc,'协议分布','总数 '+(s.total||0))+sv137Bars(p,s.total||0,pl)+sv137ChartLink('protocols',p);
   if(cc)cc.innerHTML=sv137SetChartTitle(cc,'国家 / 地区分布','总数 '+(s.countries||0))+sv137Bars(c,s.total||0,cl)+sv137ChartLink('countries',c);
 }
-function sv137Health(nodes){var a=0,d=0,u=0;(nodes||[]).forEach(function(n){if(n.aliveOK===true)a++;else if(n.aliveOK===false)d++;else u++});return{alive:a,dead:d,unknown:u,total:(nodes||[]).length}}
+function sv137Health(nodes){var a=0,d=0,m=0,u=0;(nodes||[]).forEach(function(n){if(n.aliveOK===true)a++;else if(aliveIsApiMissing(n))m++;else if(aliveIsTrueDead(n))d++;else u++});return{alive:a,dead:d,apiMissing:m,unknown:u,total:(nodes||[]).length}}
 function sv137RenderHealth(nodes){
   var h=sv137Health(nodes||[]),el=sv137ById('sv135Health');if(!el)return;
   var p=h.total?Math.round(h.alive/h.total*1000)/10:0;
   el.innerHTML='<div class="sv137-card-head"><h2>节点健康状况</h2><div class="sv137-total">总数 '+h.total+'</div></div>'+
     '<div class="sv137-health-main"><div class="sv137-health-label">可用率</div><b class="sv137-health-rate">'+(h.total?p.toFixed(1).replace(/\.0$/,''):'--')+'%</b><div class="sv137-health-bar"><i style="width:'+(h.total?p:0)+'%"></i></div></div>'+
-    '<div class="health-grid"><div class="health-cell health-ok"><span>可用</span><b id="hAlive">'+h.alive+'</b><small>'+sv137FmtPct(h.alive,h.total)+'</small></div><div class="health-cell health-bad"><span>不可用</span><b id="hDead">'+h.dead+'</b><small>'+sv137FmtPct(h.dead,h.total)+'</small></div><div class="health-cell"><span>未知</span><b id="hUntested">'+h.unknown+'</b><small>'+sv137FmtPct(h.unknown,h.total)+'</small></div><div class="health-cell health-scope"><span>当前筛选</span><b id="hScope">'+h.total+'</b><small>100%</small></div></div>';
+    '<div class="health-grid"><div class="health-cell health-ok"><span>可用</span><b id="hAlive">'+h.alive+'</b><small>'+sv137FmtPct(h.alive,h.total)+'</small></div><div class="health-cell health-bad"><span>真实不可用</span><b id="hDead">'+h.dead+'</b><small>'+sv137FmtPct(h.dead,h.total)+'</small></div><div class="health-cell"><span>API未找到</span><b id="hUntested">'+h.apiMissing+'</b><small>'+sv137FmtPct(h.apiMissing,h.total)+'</small></div><div class="health-cell health-scope"><span>当前筛选</span><b id="hScope">'+h.total+'</b><small>100%</small></div></div>'+(h.unknown?'<div class="small muted" style="margin-top:8px">未测 / 未知：'+h.unknown+' 个</div>':'');
 }
 function sv137EnsureHealthCard(){
   var p=sv137Closest(sv137ById('protocols'),'.card'),c=sv137Closest(sv137ById('countries'),'.card');if(!p||!c)return;
@@ -840,9 +867,9 @@ function sv137EnsureHealthCard(){
 function sv137Region(n){var cc=String(n.countryCode||'').toUpperCase();return (flag(cc)+' '+(n.country||'未知')+(n.geoCity?' '+n.geoCity:''))}
 function sv137LatencyNumber(v){var n=parseInt(v,10);return isFinite(n)?n:null}
 function sv137FmtLatencyValue(v,cls){var n=sv137LatencyNumber(v);if(n==null)return '<span class="sv137-latency muted">--</span>';return '<span class="sv137-latency '+(cls||((n>90)?'warn':'ok'))+'">'+esc(n)+' ms</span>'}
-function sv137AliveLatency(n){var v=sv137LatencyNumber(n&&n.aliveLatency);if(!n||n.aliveOK!==true||v==null)return '<span class="sv137-latency bad">不可用</span>';return sv137FmtLatencyValue(v)}
+function sv137AliveLatency(n){var v=sv137LatencyNumber(n&&n.aliveLatency);if(n&&n.aliveOK===true&&v!=null)return sv137FmtLatencyValue(v);if(aliveIsApiMissing(n))return '<span class="sv137-latency muted">API未找到</span>';if(n&&n.aliveOK===false)return '<span class="sv137-latency bad">不可用</span>';return '<span class="sv137-latency muted">未检测</span>'}
 function sv137LandingLatency(n){var v=sv137LatencyNumber(n&&n.landingLatency);if(!n)return '<span class="sv137-latency muted">未检测</span>';if(n.landingOK===false||n.landingError)return '<span class="sv137-latency warn">检测失败</span>';if(n.landingOK!==true||v==null)return '<span class="sv137-latency muted">未检测</span>';return sv137FmtLatencyValue(v)}
-function sv137NodeStatus(n){if(n.aliveOK===true)return '<span class="sv137-status-pill ok">可用</span>';if(n.aliveOK===false)return '<span class="sv137-status-pill bad">不可用</span>';return '<span class="sv137-status-pill">未知</span>'}
+function sv137NodeStatus(n){if(n&&n.aliveOK===true)return '<span class="sv137-status-pill ok">可用</span>';if(aliveIsApiMissing(n))return '<span class="sv137-status-pill">API未找到</span>';if(n&&n.aliveOK===false)return '<span class="sv137-status-pill bad">真实不可用</span>';return '<span class="sv137-status-pill">未检测</span>'}
 function sv137CountrySource(n){var s=String((n&&n.countrySource)||'').toLowerCase();if(s==='landing')return '<span class="sv137-source-badge landing">落地验证</span>';if(s==='flag'||s==='name')return '<span class="sv137-source-badge name">名称识别</span>';if(s==='geoip')return '<span class="sv137-source-badge">GeoIP</span>';return '<span class="sv137-source-badge">未确认</span>'}
 function sv137EntryText(n){var host=(n&&n.entryServer)||((n&&n.extra&&(n.extra.server||n.extra.add))||'')||(n&&n.server)||'';var port=(n&&n.port)||((n&&n.extra&&n.extra.port)||'');if(host&&port)return String(host)+':'+String(port);return host||'--'}
 function sv137CleanParts(parts){return (parts||[]).map(function(x){return String(x==null?'':x).trim()}).filter(function(x){return x&&x!=='undefined'&&x!=='null'})}
@@ -850,7 +877,7 @@ function sv137ExitParts(n){if(!n||!n.landingIP)return [];var asn=String(n.landin
 function sv137ExitText(n){var p=sv137ExitParts(n);if(p.length)return p.join(' / ');if(n&&n.landingOK===false)return '检测失败';return '未检测'}
 function sv137NodeDetail(n){var entry=sv137EntryText(n),exit=sv137ExitText(n),same=false;try{same=!!(n&&n.landingIP&&String(entry).split(':')[0]===String(n.landingIP))}catch(_){}return '<div class="sv137-detail"><div class="sv137-detail-grid"><div class="sv137-detail-item"><div class="sv137-detail-label">入口 IP:端口（连接目标）</div><div class="sv137-detail-value">'+esc(entry)+'</div></div><div class="sv137-detail-item"><div class="sv137-detail-label">出口 IP / 国家 / 城市 / ISP / ASN（落地检测结果）</div><div class="sv137-detail-value">'+esc(exit)+'</div></div></div><div class="sv137-detail-note">'+(same?'入口 IP 与出口 IP 相同。':'入口 IP 和出口 IP 可以不同，这是正常的中转 / 转发结构。')+'</div></div>'}
 function sv137SearchText(n){return [n.name,n.server,n.entryServer,n.port,n.country,n.protocol,n.geoCity,n.landingIP,n.landingCountry,n.landingCity,n.landingISP,n.landingASN].map(function(x){return String(x||'')}).join(' ').toLowerCase()}
-function sv137AliveSortValue(n,idx){var v=sv137LatencyNumber(n&&n.aliveLatency);if(n&&n.aliveOK===true&&v!=null)return v*100000+idx;if(n&&n.aliveOK===false)return 900000000+idx;return 800000000+idx}
+function sv137AliveSortValue(n,idx){var v=sv137LatencyNumber(n&&n.aliveLatency);if(n&&n.aliveOK===true&&v!=null)return v*100000+idx;if(aliveIsApiMissing(n))return 950000000+idx;if(n&&n.aliveOK===false)return 900000000+idx;return 800000000+idx}
 function sv137SortByAlive(arr){return (arr||[]).map(function(n,i){return{n:n,i:i,v:sv137AliveSortValue(n,i)}}).sort(function(a,b){return a.v-b.v}).map(function(x){return x.n})}
 function sv137FilteredBase(){if(!DATA)return[];var ns=(sv137ById('unique')&&sv137ById('unique').checked)?uniq(DATA.nodes):DATA.nodes;var q=(sv137ById('q')&&sv137ById('q').value||'').toLowerCase(),pf=(sv137ById('pf')&&sv137ById('pf').value)||'',cf=(sv137ById('cf')&&sv137ById('cf').value)||'',alive=!!(sv137ById('onlyAlive')&&sv137ById('onlyAlive').checked);var out=(ns||[]).filter(function(n){return(!pf||n.protocol==pf)&&(!cf||n.country==cf)&&(!alive||n.aliveOK===true)&&(!q||sv137SearchText(n).indexOf(q)>=0)});return sv137SortByAlive(out)}
 filtered=sv137FilteredBase;
