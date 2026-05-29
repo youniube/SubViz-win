@@ -59,6 +59,10 @@ assert(!/ws-opts: "\{/.test(yaml), 'Mihomo export stringified ws-opts as JSON');
 assert(!/grpc-opts: "\{/.test(yaml), 'Mihomo export stringified grpc-opts as JSON');
 assert(/udp: true/.test(yaml), 'Mihomo export must coerce udp string values such as "1" to boolean true');
 assert(!/udp: "1"/.test(yaml), 'Mihomo export must not quote udp as a scalar string');
+assert(/tls: true/.test(yaml), 'Mihomo export must coerce tls/security string values to boolean true');
+assert(!/tls: "(?:tls|true|reality)"/i.test(yaml), 'Mihomo export must not quote tls as a scalar string');
+assert(!/^\s*security:/m.test(yaml), 'Mihomo export must not leak intermediate security field');
+assert(/rules:\n\s+- "MATCH,🚀 节点选择"/.test(yaml), 'Mihomo export must quote the complete MATCH rule string');
 
 sandbox.window.__setExportTestData({ ok:true, summary:{ total:nodes.length }, nodes }, selected, 'uri');
 const uris = sandbox.window.__toURIText();

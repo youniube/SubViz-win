@@ -10,9 +10,10 @@ process.env.SUBVIZ_NO_MIHOMO = '1';
 const parser = require('../lib/parser');
 const { normalizeGeoResult } = require('../lib/geo');
 const { MihomoManager, nodeToMihomoProxy } = require('../lib/mihomo-manager');
-const { availabilityStatusOK, firstExpectedStatus } = require('../lib/availability');
+const { availabilityStatusOK, firstExpectedStatus, availabilityCheck } = require('../lib/availability');
 const { createSubVizServer } = require('../server');
 const store = require('../lib/store');
+const landing = require('../lib/landing');
 
 function assertParser() {
   const fixture = fs.readFileSync(path.join(__dirname, '..', 'test/fixtures/clash-mixed.yaml'), 'utf8');
@@ -53,15 +54,46 @@ function assertMihomoMapping() {
   assert(yaml.includes('port: 17892'));
   assert(yaml.includes('external-controller: 127.0.0.1:19090'));
   assert(yaml.includes('name: "dup (2)"'));
+  assert(yaml.includes('MATCH,subviz-select'));
+  assert(!yaml.includes('MATCH,DIRECT'));
   assert(!yaml.includes('port: 7890'));
 }
 
-function assertAvailability() {
+async function assertAvailability() {
   assert(availabilityStatusOK(204, '204'));
   assert(availabilityStatusOK(200, '2xx'));
   assert(availabilityStatusOK(299, '200-299'));
   assert(!availabilityStatusOK(404, '2xx'));
   assert.equal(firstExpectedStatus('2xx'), 200);
+  const fake = {
+    isReady: async () => true,
+    getProxyInventory: async () => ({ total: 2, nodeCount: 1, nameSet: new Set(['node-a']), nodeNameSet: new Set(['node-a']) }),
+    findLoadedProxyName: () => ({ found: true, name: 'node-a', candidates: ['node-a'] }),
+    controllerBaseURL: () => 'http://127.0.0.1:19090',
+    delayRequestPath: (name, url) => '/proxies/' + encodeURIComponent(name) + '/delay?url=' + encodeURIComponent(url),
+    requestViaNode: async () => ({ status: 204, latency: 12, body: '' }),
+  };
+  const ok = await availabilityCheck({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: fake, statusExpr: '204' });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.status, 204);
+  const badFake = Object.assign({}, fake, { requestViaNode: async () => ({ status: 200, latency: 12, body: '' }) });
+  const bad = await availabilityCheck({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: badFake, statusExpr: '204', retries: 0 });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.category, 'bad_status');
+}
+
+async function assertLandingDoesNotInject() {
+  let injected = 0;
+  const fake = {
+    isReady: async () => true,
+    getProxyInventory: async () => ({ total: 2, nodeCount: 1, nameSet: new Set(['node-a']), nodeNameSet: new Set(['node-a']) }),
+    findLoadedProxyName: () => ({ found: true, name: 'node-a', candidates: ['node-a'] }),
+    injectNodes: async () => { injected++; throw new Error('should not inject during landing'); },
+    requestViaNode: async () => ({ status: 200, latency: 10, body: JSON.stringify({ success: true, ip: '8.8.8.8', country_code: 'US', country: 'United States' }) }),
+  };
+  const r = await landing.landingLookup({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: fake, api: 'https://ipwho.is/?lang=zh-CN', retries: 0 });
+  assert.equal(injected, 0);
+  assert.equal(r.ok, true);
 }
 
 async function assertServerRoutes() {
@@ -110,7 +142,8 @@ function assertStore() {
   assertParser();
   assertGeo();
   assertMihomoMapping();
-  assertAvailability();
+  await assertAvailability();
+  await assertLandingDoesNotInject();
   assertStore();
   await assertServerRoutes();
   console.log('node-app-test ok');

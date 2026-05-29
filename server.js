@@ -10,9 +10,9 @@ const gist = require('./lib/gist');
 const { MihomoManager } = require('./lib/mihomo-manager');
 const landing = require('./lib/landing');
 const availability = require('./lib/availability');
-const { clean, fetchText, parseInteger } = require('./lib/utils');
+const { clean, fetchText, parseInteger, DEFAULT_USER_AGENT, PACKAGE_VERSION } = require('./lib/utils');
 
-const VERSION = '0.2.0-node';
+const VERSION = PACKAGE_VERSION;
 const DEFAULT_HOST = process.env.SUBVIZ_HOST || '127.0.0.1';
 const DEFAULT_PORT = Number(process.env.SUBVIZ_PORT || 3456);
 const ROOT = __dirname;
@@ -55,7 +55,11 @@ function sendJSON(res, obj, status = 200) {
 function sendFile(res, file) {
   fs.readFile(file, (err, data) => {
     if (err) return sendJSON(res, { ok: false, error: 'not found' }, 404);
-    send(res, 200, data, { 'Content-Type': mime(file) });
+    let body = data;
+    if (path.basename(file) === 'index.html') {
+      body = data.toString('utf8').replace(/\{\{__VERSION__\}\}/g, VERSION);
+    }
+    send(res, 200, body, { 'Content-Type': mime(file) });
   });
 }
 
@@ -91,16 +95,98 @@ function parseJSONBody(text) {
   catch (e) { const err = new Error('请求体不是有效 JSON：' + String(e.message || e)); err.statusCode = 400; throw err; }
 }
 
-async function parseAndInject(text, sourceUrl, mihomo) {
+async function parseAndInject(text, sourceUrl, mihomo, meta = {}) {
   const result = parser.parseSubscription(text || '');
   result.ok = true;
   if (sourceUrl) result.sourceUrl = sourceUrl;
-  if (!result.summary || !result.summary.total) result.warning = 'subscription parsed, but no proxy nodes were found';
+  if (meta.fetchDiagnostics) {
+    result.fetchDiagnostics = Object.assign({}, meta.fetchDiagnostics, {
+      parsedNodeCount: result.summary && result.summary.total || (result.nodes || []).length || 0,
+    });
+  }
+  if (!result.summary || !result.summary.total) {
+    result.warning = meta.fetchDiagnostics && meta.fetchDiagnostics.looksLikeHtml
+      ? 'subscription fetch returned HTML/error page; try another subscription client User-Agent'
+      : 'subscription parsed, but no proxy nodes were found';
+  }
   if (mihomo && result.nodes && result.nodes.length) {
     result.mihomo = await mihomo.injectNodes(result.nodes).catch(e => ({ ok: false, error: String(e && e.message || e) }));
     if (result.mihomo && result.mihomo.diagnostics) result.mihomoDiagnostics = result.mihomo.diagnostics;
   }
   return result;
+}
+
+const SUBSCRIPTION_CLIENTS = {
+  mihomo: 'Mihomo/1.19.0',
+  'clash-meta': 'Clash.Meta/1.19.0',
+  clash: 'Clash/1.18.0',
+  'sing-box': 'sing-box/1.10.0',
+  surge: 'Surge/5.0',
+  loon: 'Loon/3.0',
+  stash: 'Stash/2.0',
+  shadowrocket: 'Shadowrocket/2.2.0',
+  'quantumult-x': 'Quantumult%20X/1.0.30',
+  subviz: DEFAULT_USER_AGENT,
+};
+
+function normalizeClientName(v) {
+  v = clean(v).toLowerCase();
+  if (v === 'clashmeta' || v === 'clash.meta') return 'clash-meta';
+  if (v === 'singbox') return 'sing-box';
+  if (v === 'quanx' || v === 'quantumultx') return 'quantumult-x';
+  return v || 'mihomo';
+}
+
+function subscriptionUserAgent(client, customUA) {
+  client = normalizeClientName(client);
+  if (client === 'custom' && clean(customUA)) return clean(customUA);
+  return SUBSCRIPTION_CLIENTS[client] || SUBSCRIPTION_CLIENTS.mihomo;
+}
+
+function looksLikeHtml(text, headers) {
+  const ct = String((headers && (headers['content-type'] || headers['Content-Type'])) || '').toLowerCase();
+  const sample = String(text || '').trim().slice(0, 500).toLowerCase();
+  return ct.includes('text/html') || sample.startsWith('<!doctype html') || sample.startsWith('<html') || /<html[\s>]/i.test(sample);
+}
+
+function fetchDiagnostics(sourceUrl, fetched, client, ua) {
+  const body = fetched && fetched.body || '';
+  const headers = fetched && fetched.headers || {};
+  return {
+    url: sourceUrl,
+    status: fetched && fetched.status || 0,
+    statusText: fetched && fetched.statusText || '',
+    contentType: headers['content-type'] || headers['Content-Type'] || '',
+    bytes: Buffer.byteLength(body, 'utf8'),
+    userAgent: ua,
+    client,
+    looksLikeHtml: looksLikeHtml(body, headers),
+    bodyPreview: String(body || '').slice(0, 240),
+  };
+}
+
+async function fetchSubscription(sourceUrl, client, customUA) {
+  client = normalizeClientName(client);
+  const tryClients = client === 'auto'
+    ? ['mihomo', 'clash-meta', 'clash', 'sing-box', 'surge', 'loon', 'stash', 'shadowrocket', 'subviz']
+    : [client];
+  let last = null;
+  for (const c of tryClients) {
+    const ua = subscriptionUserAgent(c, customUA);
+    const fetched = await fetchText(sourceUrl, {
+      timeout: 30000,
+      headers: {
+        'User-Agent': ua,
+        'Accept': '*/*',
+        'Cache-Control': 'no-cache',
+      },
+    });
+    const diag = fetchDiagnostics(sourceUrl, fetched, c, ua);
+    last = { fetched, diagnostics: diag };
+    if (fetched.status >= 400) continue;
+    if (!diag.looksLikeHtml) return last;
+  }
+  return last;
 }
 
 async function routeAPI(req, res, ctx, url) {
@@ -141,15 +227,36 @@ async function routeAPI(req, res, ctx, url) {
 
   if (req.method === 'GET' && p === '/api/analyze') {
     const sourceUrl = clean(url.searchParams.get('url'));
+    const client = normalizeClientName(url.searchParams.get('client') || 'mihomo');
+    const customUA = clean(url.searchParams.get('ua') || url.searchParams.get('userAgent'));
     if (!sourceUrl) return sendJSON(res, { ok: false, error: 'missing url' }, 400);
     try {
-      const fetched = await fetchText(sourceUrl, { timeout: 30000, headers: { 'User-Agent': 'SubViz/0.2.0-node' } });
+      const fetchedResult = await fetchSubscription(sourceUrl, client, customUA);
+      const fetched = fetchedResult && fetchedResult.fetched || { status: 0, body: '', headers: {} };
+      const diag = fetchedResult && fetchedResult.diagnostics || fetchDiagnostics(sourceUrl, fetched, client, subscriptionUserAgent(client, customUA));
       if (fetched.status >= 400) {
-        return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, bodyPreview: String(fetched.body || '').slice(0, 240) }, 502);
+        return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag, bodyPreview: String(fetched.body || '').slice(0, 240) }, 502);
       }
-      return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo));
+      return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo, { fetchDiagnostics: diag }));
     } catch (e) {
       return sendJSON(res, { ok: false, error: String(e && e.message || e), sourceUrl }, 502);
+    }
+  }
+
+  if (req.method === 'POST' && p === '/api/analyze-url') {
+    try {
+      const body = parseJSONBody(await readBody(req, 1024 * 1024));
+      const sourceUrl = clean(body.url);
+      const client = normalizeClientName(body.client || 'mihomo');
+      const customUA = clean(body.userAgent || body.ua);
+      if (!sourceUrl) return sendJSON(res, { ok: false, error: 'missing url' }, 400);
+      const fetchedResult = await fetchSubscription(sourceUrl, client, customUA);
+      const fetched = fetchedResult && fetchedResult.fetched || { status: 0, body: '', headers: {} };
+      const diag = fetchedResult && fetchedResult.diagnostics || fetchDiagnostics(sourceUrl, fetched, client, subscriptionUserAgent(client, customUA));
+      if (fetched.status >= 400) return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag }, 502);
+      return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo, { fetchDiagnostics: diag }));
+    } catch (e) {
+      return sendJSON(res, { ok: false, error: String(e && e.message || e) }, e.statusCode || 502);
     }
   }
 

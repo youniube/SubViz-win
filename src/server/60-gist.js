@@ -147,7 +147,7 @@
     var filename = clean(body.filename || body.file || '');
     var content = body.content;
     var gistId = clean(body.gistId || '');
-    if (!gistTokenLooksValid(token)) return respondJSON({ ok:false, error:'没有可用 Token：请先输入 Token 或保存到 Surge' }, 400);
+    if (!gistTokenLooksValid(token)) return respondJSON({ ok:false, error:'没有可用 Token：请先输入 Token 或保存到本机' }, 400);
     if (!gistName && !gistId) return respondJSON({ ok:false, error:'请填写 Gist 名称；为了避免误改已有 Gist，此项必填' }, 400);
     if (!filename) return respondJSON({ ok:false, error:'请填写文件名；为了避免误改已有文件，此项必填' }, 400);
     if (content === undefined || content === null || String(content).length === 0) return respondJSON({ ok:false, error:'上传内容为空' }, 400);
