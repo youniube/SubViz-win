@@ -95,6 +95,85 @@ function parseJSONBody(text) {
   catch (e) { const err = new Error('请求体不是有效 JSON：' + String(e.message || e)); err.statusCode = 400; throw err; }
 }
 
+
+function subvizDebugEnabled() {
+  const v = String(process.env.SUBVIZ_DEBUG || '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function logConsoleDiag(scope, message, data) {
+  const line = '[subviz:' + scope + '] ' + message;
+  if (data !== undefined && data !== null) console.log(line, data);
+  else console.log(line);
+}
+
+function parsedNodeCount(text) {
+  try {
+    const r = parser.parseSubscription(text || '');
+    return r && r.summary && Number(r.summary.total) || (r && r.nodes && r.nodes.length) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function summarizeReasonMap(map, limit = 5) {
+  const entries = Object.keys(map || {}).sort((a, b) => (map[b] || 0) - (map[a] || 0)).slice(0, limit);
+  return entries.map(k => k + ' ' + (map[k] || 0) + ' 个').join('，');
+}
+
+function summarizeSamples(items, limit = 5) {
+  return (items || []).slice(0, limit).map(item => {
+    if (typeof item === 'string') return item;
+    return clean(item && (item.displayName || item.name || item.rawName || item.server)) || JSON.stringify(item).slice(0, 80);
+  }).filter(Boolean).join('；');
+}
+
+function logFetchDiagnostics(diag) {
+  if (!diag) return;
+  const status = diag.status || 0;
+  const ct = diag.contentType || 'unknown';
+  if (status >= 400) {
+    logConsoleDiag('fetch', '订阅拉取失败：HTTP ' + status + '，可能需要更换客户端 UA');
+  } else if (diag.looksLikeHtml) {
+    logConsoleDiag('fetch', '订阅内容疑似 HTML 页面，可能被机场拦截或需要指定代理软件 UA');
+  } else {
+    logConsoleDiag('fetch', '订阅拉取成功：HTTP ' + status + '，客户端 ' + (diag.client || 'unknown') + '，' + (diag.bytes || 0) + ' bytes，Content-Type ' + ct);
+  }
+  if (subvizDebugEnabled() && diag.bodyPreview) {
+    logConsoleDiag('fetch', '响应预览：' + String(diag.bodyPreview).replace(/\s+/g, ' ').slice(0, 240));
+  }
+}
+
+function logMihomoDiagnostics(result) {
+  const summaryTotal = result && result.summary && Number(result.summary.total) || (result && result.nodes && result.nodes.length) || 0;
+  const mihomoResult = result && result.mihomo;
+  const m = result && (result.mihomoDiagnostics || (mihomoResult && mihomoResult.diagnostics));
+  if (m) {
+    logConsoleDiag('mihomo', '订阅已加载：解析节点 ' + (m.parsedCount || summaryTotal) + '，写入配置 ' + (m.writtenCount || 0) + '，API 可见 ' + (m.mihomoNodeCount || 0) + '，可测匹配 ' + (m.testableCount || 0) + '，未匹配 ' + (m.missingCount || 0) + '，转换跳过 ' + (m.conversionSkippedCount || 0));
+    const parts = [];
+    if (m.conversionSkippedCount) parts.push('节点转换跳过：' + (summarizeReasonMap(m.conversionSkippedReasons) || (m.conversionSkippedCount + ' 个')));
+    if (m.missingCount) parts.push('节点名称未匹配：' + m.missingCount + ' 个');
+    if (parts.length) logConsoleDiag('mihomo', parts.join('；'));
+    if (subvizDebugEnabled()) {
+      const skipped = summarizeSamples(m.conversionSkippedSample);
+      const missing = summarizeSamples(m.missingSample);
+      if (skipped) logConsoleDiag('mihomo', '转换跳过样例：' + skipped);
+      if (missing) logConsoleDiag('mihomo', '未匹配样例：' + missing);
+    }
+    return;
+  }
+  if (mihomoResult && mihomoResult.ok === false) {
+    logConsoleDiag('mihomo', '订阅加载失败：' + (mihomoResult.error || 'mihomo not ready'));
+  } else if (mihomoResult && mihomoResult.ok) {
+    logConsoleDiag('mihomo', '订阅已加载：解析节点 ' + summaryTotal + '，写入配置 ' + (mihomoResult.writtenCount || mihomoResult.count || 0));
+  }
+}
+
+function logAnalysisDiagnostics(result, meta) {
+  if (meta && meta.fetchDiagnostics) logFetchDiagnostics(meta.fetchDiagnostics);
+  logMihomoDiagnostics(result);
+}
+
 async function parseAndInject(text, sourceUrl, mihomo, meta = {}) {
   const result = parser.parseSubscription(text || '');
   result.ok = true;
@@ -103,6 +182,7 @@ async function parseAndInject(text, sourceUrl, mihomo, meta = {}) {
     result.fetchDiagnostics = Object.assign({}, meta.fetchDiagnostics, {
       parsedNodeCount: result.summary && result.summary.total || (result.nodes || []).length || 0,
     });
+    meta.fetchDiagnostics = result.fetchDiagnostics;
   }
   if (!result.summary || !result.summary.total) {
     result.warning = meta.fetchDiagnostics && meta.fetchDiagnostics.looksLikeHtml
@@ -113,9 +193,9 @@ async function parseAndInject(text, sourceUrl, mihomo, meta = {}) {
     result.mihomo = await mihomo.injectNodes(result.nodes).catch(e => ({ ok: false, error: String(e && e.message || e) }));
     if (result.mihomo && result.mihomo.diagnostics) result.mihomoDiagnostics = result.mihomo.diagnostics;
   }
+  logAnalysisDiagnostics(result, meta);
   return result;
 }
-
 const SUBSCRIPTION_CLIENTS = {
   mihomo: 'Mihomo/1.19.0',
   'clash-meta': 'Clash.Meta/1.19.0',
@@ -167,7 +247,8 @@ function fetchDiagnostics(sourceUrl, fetched, client, ua) {
 
 async function fetchSubscription(sourceUrl, client, customUA) {
   client = normalizeClientName(client);
-  const tryClients = client === 'auto'
+  const autoMode = client === 'auto';
+  const tryClients = autoMode
     ? ['mihomo', 'clash-meta', 'clash', 'sing-box', 'surge', 'loon', 'stash', 'shadowrocket', 'subviz']
     : [client];
   let last = null;
@@ -183,12 +264,13 @@ async function fetchSubscription(sourceUrl, client, customUA) {
     });
     const diag = fetchDiagnostics(sourceUrl, fetched, c, ua);
     last = { fetched, diagnostics: diag };
-    if (fetched.status >= 400) continue;
-    if (!diag.looksLikeHtml) return last;
+    if (!autoMode) return last;
+    if (fetched.status >= 400 || diag.looksLikeHtml) continue;
+    diag.parsedNodeCount = parsedNodeCount(fetched.body || '');
+    if (diag.parsedNodeCount > 0) return last;
   }
   return last;
 }
-
 async function routeAPI(req, res, ctx, url) {
   const { mihomo } = ctx;
   const p = url.pathname;
@@ -235,10 +317,12 @@ async function routeAPI(req, res, ctx, url) {
       const fetched = fetchedResult && fetchedResult.fetched || { status: 0, body: '', headers: {} };
       const diag = fetchedResult && fetchedResult.diagnostics || fetchDiagnostics(sourceUrl, fetched, client, subscriptionUserAgent(client, customUA));
       if (fetched.status >= 400) {
+        logFetchDiagnostics(diag);
         return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag, bodyPreview: String(fetched.body || '').slice(0, 240) }, 502);
       }
       return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo, { fetchDiagnostics: diag }));
     } catch (e) {
+      logConsoleDiag('fetch', '订阅拉取失败：' + String(e && e.message || e));
       return sendJSON(res, { ok: false, error: String(e && e.message || e), sourceUrl }, 502);
     }
   }
@@ -253,9 +337,10 @@ async function routeAPI(req, res, ctx, url) {
       const fetchedResult = await fetchSubscription(sourceUrl, client, customUA);
       const fetched = fetchedResult && fetchedResult.fetched || { status: 0, body: '', headers: {} };
       const diag = fetchedResult && fetchedResult.diagnostics || fetchDiagnostics(sourceUrl, fetched, client, subscriptionUserAgent(client, customUA));
-      if (fetched.status >= 400) return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag }, 502);
+      if (fetched.status >= 400) { logFetchDiagnostics(diag); return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag }, 502); }
       return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo, { fetchDiagnostics: diag }));
     } catch (e) {
+      logConsoleDiag('fetch', '订阅拉取失败：' + String(e && e.message || e));
       return sendJSON(res, { ok: false, error: String(e && e.message || e) }, e.statusCode || 502);
     }
   }

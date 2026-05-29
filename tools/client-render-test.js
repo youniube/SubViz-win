@@ -25,6 +25,8 @@ assert(!code.includes('一键复制干净配置'), 'top quick copy button should
 assert(!code.includes('sv136CopyAliveQuick'), 'top copy alive quick button should not be rendered');
 assert(!/sv136AddTitle\('sv136(Select|Action|Advanced|Export)Title'/.test(code),
   'sv136 must not add duplicate section titles already added by sv135');
+assert(!code.includes('拉取 / Mihomo 诊断'), 'frontend diagnostics panel title must not be rendered');
+assert(!code.includes('svDiagCard') && !code.includes('svDiagRender'), 'frontend diagnostics panel logic must not be present');
 assert(/summary:before\{content:"▸"/.test(code),
   'details summary disclosure marker should stay visible');
 

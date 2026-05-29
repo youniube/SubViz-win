@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 
 process.env.SUBVIZ_NO_MIHOMO = '1';
 
@@ -96,6 +97,29 @@ async function assertLandingDoesNotInject() {
   assert.equal(r.ok, true);
 }
 
+
+function captureConsoleLogs() {
+  const logs = [];
+  const orig = console.log;
+  console.log = function () {
+    logs.push(Array.prototype.slice.call(arguments).join(' '));
+  };
+  return { logs, restore: () => { console.log = orig; } };
+}
+
+async function withRemoteSubscription(body, headers, fn) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, headers || {}));
+    res.end(body);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    return await fn('http://127.0.0.1:' + server.address().port + '/sub');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
 async function assertServerRoutes() {
   const fake = {
     isReady: async () => false,
@@ -104,7 +128,15 @@ async function assertServerRoutes() {
     socksPort: 17891,
     httpPort: 17892,
     apiPort: 19090,
-    injectNodes: async nodes => ({ ok: true, count: nodes.length }),
+    injectNodes: async nodes => ({ ok: true, count: nodes.length, writtenCount: nodes.length, diagnostics: {
+      parsedCount: nodes.length,
+      writtenCount: nodes.length,
+      mihomoNodeCount: nodes.length + 1,
+      testableCount: nodes.length,
+      missingCount: 0,
+      conversionSkippedCount: 0,
+      conversionSkippedReasons: {},
+    } }),
   };
   const server = createSubVizServer({ mihomoManager: fake });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -123,6 +155,18 @@ async function assertServerRoutes() {
     assert.equal(result.nodes[0].countryCode, 'HK');
     const html = await fetch(`http://127.0.0.1:${port}/`).then(r => r.text());
     assert(html.includes('Local Node UI'));
+
+    await withRemoteSubscription('ss://YWVzLTEyOC1nY206cGFzc0AxLjEuMS4xOjQ0Mw#HK%2001', {}, async (remoteUrl) => {
+      const cap = captureConsoleLogs();
+      try {
+        const pulled = await fetch(`http://127.0.0.1:${port}/api/analyze?url=${encodeURIComponent(remoteUrl)}&client=mihomo`).then(r => r.json());
+        assert.equal(pulled.ok, true);
+        assert(cap.logs.some(l => l.includes('[subviz:fetch] 订阅拉取成功：HTTP 200，客户端 mihomo')), 'fetch diagnostics should be logged to console');
+        assert(cap.logs.some(l => l.includes('[subviz:mihomo] 订阅已加载：解析节点 1，写入配置 1，API 可见 2，可测匹配 1，未匹配 0，转换跳过 0')), 'mihomo summary should be logged to console');
+      } finally {
+        cap.restore();
+      }
+    });
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
