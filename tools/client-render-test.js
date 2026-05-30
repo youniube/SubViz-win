@@ -269,13 +269,33 @@ vm.runInContext('apply(); clearSelected(); selectAllNodes();', sandbox);
 assert(vm.runInContext('selectedNodes().length', sandbox) === 3,
   '全选全部节点 should select all raw nodes after hiding duplicates is turned off');
 
-// ---- 2.2) 停止测活入口不应报普通错误，并会调用 AbortController.abort ----
+// ---- 2.2) 测活按钮必须立即进入运行态，并可立即停止 ----
 els.alive.textContent = '测活开始';
-vm.runInContext('AVAILABILITY_RUNNING=true; AVAILABILITY_ABORT_CONTROLLER=new AbortController(); AVAILABILITY_PROGRESS={completed:1,total:3}; aliveTest();', sandbox);
+sandbox.fetch = function () { return new Promise(function () {}); };
+vm.runInContext('render(' + JSON.stringify(data) + '); clearSelected(); selectCurrent(); aliveTest();', sandbox);
+assert(vm.runInContext('AVAILABILITY_RUNNING', sandbox) === true,
+  'clicking 测活开始 should immediately set availability running state');
+assert(els.alive.textContent === '停止测活',
+  'alive button should immediately switch to 停止测活');
+assert(/测活中 0 \/ 2/.test(els.status.textContent || ''),
+  'status should immediately show progress 0 / 2: ' + (els.status.textContent || ''));
+assert(vm.runInContext('selectedNodes().length', sandbox) === 2,
+  'starting availability must not clear selected nodes');
+vm.runInContext('var __abortCalls=0; AVAILABILITY_ABORT_CONTROLLER={abort:function(){__abortCalls++},signal:{aborted:false}}; aliveTest();', sandbox);
+assert(vm.runInContext('__abortCalls', sandbox) === 1,
+  'clicking 停止测活 should call AbortController.abort');
 assert(vm.runInContext('AVAILABILITY_RUNNING', sandbox) === false,
   'calling aliveTest while running should stop the current availability task');
+assert(els.alive.textContent === '测活开始',
+  'stopping availability should restore button text to 测活开始');
 assert(/测活已停止/.test(els.status.textContent || ''),
   'stopping availability should show stopped status instead of generic failure');
+assert(!/失败/.test(els.status.textContent || ''),
+  'AbortError / stop should not be displayed as a normal failure');
+assert(vm.runInContext('selectedNodes().length', sandbox) === 2,
+  'stopping availability must not clear selected nodes');
+assert(vm.runInContext('DATA.nodes.filter(function(n){return n.aliveOK===true||n.aliveOK===false}).length', sandbox) === 0,
+  'stopping before completion should keep unfinished nodes unknown');
 
 // ---- 3) sv136 dashboard 系列直调不抛 ----
 vm.runInContext('sv136EnsureDashboard(); sv136UpdateHealth(filtered()); sv136Refine();', sandbox);

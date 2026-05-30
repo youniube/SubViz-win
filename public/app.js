@@ -6,6 +6,7 @@ var AVAILABILITY_RUNNING=false;
 var AVAILABILITY_ABORT_CONTROLLER=null;
 var AVAILABILITY_STOPPED=false;
 var AVAILABILITY_PROGRESS={completed:0,total:0};
+var AVAILABILITY_RUN_ID=0;
 /* ── Consolidated style entry point ── */
 function installStyles(){
   sv132EnsureStyle();
@@ -155,10 +156,14 @@ function getAliveSettings(){return {url:cfgString('aliveUrl','http://connectivit
 function aliveQS(cfg){cfg=cfg||getAliveSettings();var q='';q+=qsAdd('url',cfg.url);q+=qsAdd('status',cfg.status);q+=qsAdd('timeout',cfg.timeout);q+=qsAdd('retries',cfg.retries);q+=qsAdd('retry_delay',cfg.retryDelay);return q}
 function applyAliveName(n,cfg){cfg=cfg||getAliveSettings();if(!cfg.showLatency)return;if(n.aliveOK!==true||!n.aliveLatency)return;if(!n.nameBeforeAlive)n.nameBeforeAlive=n.name;n.name=String(n.nameBeforeAlive).replace(/^\[\d+ms\]\s*/,'');n.name='['+n.aliveLatency+'ms] '+n.name;if(n.extra)n.extra.name=n.name}
 function runLimitedTasks(items,limit,worker,onProgress,onDone){items=items||[];limit=Math.max(1,Math.min(Number(limit)||1,items.length||1));var idx=0,active=0,done=0,stopped=false,maxActive=0;function pump(){if(stopped)return;if(done>=items.length&&active===0){if(onDone)onDone({done:done,maxActive:maxActive});return}while(active<limit&&idx<items.length){(function(item,order){idx++;active++;if(active>maxActive)maxActive=active;Promise.resolve().then(function(){return worker(item,order)}).catch(function(e){if(onProgress)onProgress(item,order,e)}).then(function(){active--;done++;if(onProgress)onProgress(item,order,null,done,items.length,maxActive);pump()})})(items[idx],idx)}}pump();return {cancel:function(){stopped=true},getMaxActive:function(){return maxActive}}}
-function setAliveButton(running){var b=$('alive');if(!b)return;if(running){b.textContent='停止测活';b.innerHTML='停止测活'}else{b.textContent='测活开始';b.innerHTML='测活开始'}}
-function isAbortErr(e){return e&&(e.name==='AbortError'||String(e.message||e).indexOf('AbortError')>=0||String(e.message||e).indexOf('aborted')>=0)}
-function cancelAvailability(reason){if(!AVAILABILITY_RUNNING)return false;AVAILABILITY_STOPPED=true;if(AVAILABILITY_ABORT_CONTROLLER){try{AVAILABILITY_ABORT_CONTROLLER.abort()}catch(_){}}AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);if(reason!=='silent'){st('测活已停止，已完成 '+(AVAILABILITY_PROGRESS.completed||0)+' / '+(AVAILABILITY_PROGRESS.total||0)+' 个。','success');console.log('[subviz:availability] 测活已停止：完成 '+(AVAILABILITY_PROGRESS.completed||0)+'/'+(AVAILABILITY_PROGRESS.total||0))}return true}
-function aliveTest(){try{if(AVAILABILITY_RUNNING){cancelAvailability();return}if(!DATA){st('请先拉取或分析订阅');return}if(GEO_RUNNING){st('已有 GeoIP / 落地检测任务正在运行；如果刚才没有进度，请刷新页面后重试。');return}var nodes=operationNodes('测活');if(!nodes.length)return;var cfg=getAliveSettings(),q=aliveQS(cfg);GEO_RUNNING=true;AVAILABILITY_RUNNING=true;AVAILABILITY_STOPPED=false;AVAILABILITY_ABORT_CONTROLLER=new AbortController();AVAILABILITY_PROGRESS={completed:0,total:nodes.length};setAliveButton(true);var signal=AVAILABILITY_ABORT_CONTROLLER.signal,total=nodes.length,next=0,active=0,done=0,ok=0,fail=0,errMap={},finalized=false;console.log('[subviz:availability] 测活开始：节点 '+total+'，并发 '+cfg.concurrency+'，超时 '+cfg.timeout+'ms');st('测活中 0 / '+total,'loading');function finish(cancelled){if(finalized)return;finalized=true;if(cancelled||AVAILABILITY_STOPPED||signal.aborted){AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);st('测活已停止，已完成 '+done+' / '+total+' 个。','success');return}AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);render(DATA);var es=Object.keys(errMap).slice(0,3).map(function(k){return k+'×'+errMap[k]}).join('；');console.log('[subviz:availability] 测活完成：可用 '+ok+'，不可用 '+fail+'，总计 '+total);st('测活完成 '+done+' / '+total+'，可用 '+ok+'，不可用 '+fail+(es?'。失败原因：'+es:''),'success')}function tick(){AVAILABILITY_PROGRESS.completed=done;recalc(DATA);apply();if(!signal.aborted)st('测活中 '+done+' / '+total+'，可用 '+ok+'，不可用 '+fail,'loading')}function launch(){if(signal.aborted||AVAILABILITY_STOPPED){if(active===0)finish(true);return}while(active<cfg.concurrency&&next<total&&!signal.aborted){(function(n){next++;active++;loadJSON('/api/availability?t='+Date.now()+q,{method:'POST',body:JSON.stringify(n),headers:{'Content-Type':'application/json;charset=utf-8'},signal:signal}).then(function(r){if(signal.aborted||AVAILABILITY_STOPPED)return;if(r&&r.cancelled)return;if(r&&r.ok&&r.alive){n.aliveOK=true;n.aliveLatency=r.latency||r.totalLatency||0;n.aliveStatus=r.status;n.aliveError='';applyAliveName(n,cfg);ok++}else{var er=aliveErr((r&&r.error)||'检测失败');n.aliveOK=false;n.aliveError=er;errMap[er]=(errMap[er]||0)+1;fail++}done++;tick()}).catch(function(e){if(signal.aborted||AVAILABILITY_STOPPED||isAbortErr(e))return;var er=aliveErr(e.message||String(e));n.aliveOK=false;n.aliveError=er;errMap[er]=(errMap[er]||0)+1;fail++;done++;tick()}).then(function(){active--;if(signal.aborted||AVAILABILITY_STOPPED){if(active===0)finish(true);return}if(done>=total&&active===0)finish(false);else launch()})})(nodes[next])}if(next>=total&&active===0)finish(false)}launch()}catch(e){AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);st('测活启动失败：'+aliveErr(e&&e.message?e.message:String(e)))}}
+function setAliveButton(running){var b=$('alive');if(!b)return;var txt=running?'停止测活':'测活开始';b.textContent=txt;b.innerHTML=txt;b.setAttribute('data-availability-running',running?'1':'0')}
+function makeAvailabilityAbortController(){if(typeof AbortController!=='undefined')return new AbortController();var c={signal:{aborted:false},abort:function(){this.signal.aborted=true}};return c}
+function isAbortErr(e){var s=String((e&&e.message)||e||'');return !!(e&&(e.name==='AbortError'||s.indexOf('AbortError')>=0||s.toLowerCase().indexOf('aborted')>=0||s.indexOf('测活已取消')>=0))}
+function cancelAvailability(reason){var wasRunning=!!AVAILABILITY_RUNNING;AVAILABILITY_STOPPED=true;AVAILABILITY_RUN_ID++;if(AVAILABILITY_ABORT_CONTROLLER){try{AVAILABILITY_ABORT_CONTROLLER.abort()}catch(_){}}AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);if(reason!=='silent'&&wasRunning){st('测活已停止，已完成 '+(AVAILABILITY_PROGRESS.completed||0)+' / '+(AVAILABILITY_PROGRESS.total||0)+' 个','success');console.log('[subviz:availability] 测活已停止：完成 '+(AVAILABILITY_PROGRESS.completed||0)+'/'+(AVAILABILITY_PROGRESS.total||0))}return wasRunning}
+function aliveTest(){try{if(AVAILABILITY_RUNNING){cancelAvailability();return}if(!DATA){st('请先拉取或分析订阅');return}if(GEO_RUNNING){st('已有 GeoIP / 落地检测任务正在运行；如果刚才没有进度，请刷新页面后重试。');return}var nodes=operationNodes('测活');if(!nodes.length)return;var cfg=getAliveSettings(),q=aliveQS(cfg);GEO_RUNNING=true;AVAILABILITY_RUNNING=true;AVAILABILITY_STOPPED=false;AVAILABILITY_ABORT_CONTROLLER=makeAvailabilityAbortController();AVAILABILITY_PROGRESS={completed:0,total:nodes.length};var signal=AVAILABILITY_ABORT_CONTROLLER.signal,total=nodes.length,next=0,active=0,done=0,ok=0,fail=0,errMap={},finalized=false,runId=++AVAILABILITY_RUN_ID;console.log('[subviz:availability] 测活开始：节点 '+total+'，并发 '+cfg.concurrency+'，超时 '+cfg.timeout+'ms');setAliveButton(true);st('测活中 0 / '+total,'loading');try{apply()}catch(_){}setAliveButton(true);st('测活中 0 / '+total,'loading');function stillCurrent(){return runId===AVAILABILITY_RUN_ID}
+function finish(cancelled){if(finalized||!stillCurrent())return;finalized=true;if(cancelled||AVAILABILITY_STOPPED||signal.aborted){AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);AVAILABILITY_PROGRESS.completed=done;st('测活已停止，已完成 '+done+' / '+total+' 个','success');return}AVAILABILITY_RUNNING=false;GEO_RUNNING=false;AVAILABILITY_PROGRESS.completed=done;setAliveButton(false);var autoText='';try{if(typeof sv133AutoPick==='function'){var autoCount=sv133AutoPick(nodes);if(sv133AutoEnabled&&sv133AutoEnabled())autoText='。已自动勾选可用节点 '+autoCount+' 个'}}catch(_){}recalc(DATA);apply();setAliveButton(false);var es=Object.keys(errMap).slice(0,3).map(function(k){return k+'×'+errMap[k]}).join('；');console.log('[subviz:availability] 测活完成：可用 '+ok+'，不可用 '+fail+'，总计 '+total);st('测活完成 '+done+' / '+total+'，实际按 '+cfg.concurrency+' 并发调度，超时 '+cfg.timeout+'ms，可用 '+ok+'，不可用 '+fail+autoText+(es?'。失败原因：'+es:''),'success')}
+function tick(){if(!stillCurrent())return;AVAILABILITY_PROGRESS.completed=done;recalc(DATA);apply();setAliveButton(true);if(!signal.aborted&&!AVAILABILITY_STOPPED)st('测活中 '+done+' / '+total+'，可用 '+ok+'，不可用 '+fail,'loading')}
+function launch(){if(!stillCurrent())return;if(signal.aborted||AVAILABILITY_STOPPED){if(active===0)finish(true);return}while(active<cfg.concurrency&&next<total&&!signal.aborted&&!AVAILABILITY_STOPPED){(function(n){next++;active++;loadJSON('/api/availability/check?t='+Date.now()+q,{method:'POST',body:JSON.stringify(n),headers:{'Content-Type':'application/json;charset=utf-8'},signal:signal}).then(function(r){if(!stillCurrent()||signal.aborted||AVAILABILITY_STOPPED)return;if(r&&r.cancelled)return;if(r&&r.ok&&r.alive){n.aliveOK=true;n.aliveLatency=r.latency||r.totalLatency||0;n.aliveStatus=r.status;n.aliveError='';applyAliveName(n,cfg);ok++}else{var er=aliveErr((r&&r.error)||'检测失败');n.aliveOK=false;n.aliveError=er;errMap[er]=(errMap[er]||0)+1;fail++}done++;tick()}).catch(function(e){if(!stillCurrent()||signal.aborted||AVAILABILITY_STOPPED||isAbortErr(e))return;var er=aliveErr(e.message||String(e));n.aliveOK=false;n.aliveError=er;errMap[er]=(errMap[er]||0)+1;fail++;done++;tick()}).then(function(){active--;if(!stillCurrent())return;if(signal.aborted||AVAILABILITY_STOPPED){if(active===0)finish(true);return}if(done>=total&&active===0)finish(false);else launch()})})(nodes[next])}if(next>=total&&active===0)finish(false)}launch()}catch(e){AVAILABILITY_RUNNING=false;GEO_RUNNING=false;setAliveButton(false);if(isAbortErr(e))st('测活已停止，已完成 '+(AVAILABILITY_PROGRESS.completed||0)+' / '+(AVAILABILITY_PROGRESS.total||0)+' 个','success');else st('测活启动失败：'+aliveErr(e&&e.message?e.message:String(e)),'error')}}
 function getLandingSettings(){var apis=cfgList('landingApis');return {concurrency:cfgInt('landingCon',2,1,10),timeout:cfgInt('landingTimeout',5000,200,30000),retries:cfgInt('landingRetries',1,0,3),retryDelay:800,format:cfgString('landingFormat',''),internal:cfgChecked('landingInternal'),apis:apis}}
 function landingQS(cfg){cfg=cfg||getLandingSettings();var q='';q+=qsAdd('timeout',cfg.timeout);q+=qsAdd('retries',cfg.retries);if(cfg.retryDelay!=null)q+=qsAdd('retry_delay',cfg.retryDelay);if(cfg.apis&&cfg.apis.length)q+=qsAdd('api',cfg.apis.join('|'));q+=qsAdd('format',cfg.format);if(cfg.internal)q+=qsAdd('internal','1');return q}
 function landingFormatName(format,n,seq,width){format=String(format||'').trim();if(!format)return '';var cc=String(n.countryCode||n.landingCountryCode||'UN').toUpperCase();var cn=String(n.country||n.landingCountry||'未知');var tags=(extractNameTags?extractNameTags(n,cleanupOptions()):[]).join(' ');var mp={flag:flag(cc),code:cc,country:cn,index:padNum(seq,width),seq:String(seq),tags:tags,tag:tags,ip:n.landingIP||'',city:n.landingCity||n.geoCity||'',isp:n.landingISP||n.geoISP||'',asn:n.landingASN||n.geoASN||''};return format.replace(/\{(flag|code|country|index|seq|tags|tag|ip|city|isp|asn)\}/g,function(_,k){return mp[k]||''}).replace(/\s+/g,' ').trim()}
@@ -423,7 +428,7 @@ function sv133InstallStyle(){
     sv133Move(['geo','landing','alive','cleanNames','restoreNames'], 'sv133MainGrid', 'sv133-grid', null);
     sv133Move(['copyAliveBtn','copyBtn','exportBtn'], 'sv133ExportGrid', 'sv133-grid three', null);
     var clean=sv133ById('cleanNames'); if(clean) clean.textContent='清理节点名';
-    var alive=sv133ById('alive'); if(alive) alive.textContent='测活';
+    setAliveButton(AVAILABILITY_RUNNING);
     var selAlive=sv133ById('selectAliveBtn'); if(selAlive) selAlive.textContent='勾选可用';
   }
   window.selectAliveCurrent=function(){
@@ -446,49 +451,7 @@ function sv133InstallStyle(){
     }
     return alive.length;
   }
-  window.aliveTest=function(){
-    try{
-      if(!DATA){st('请先拉取或分析订阅');return}
-      if(GEO_RUNNING){st('已有检测任务正在运行；如果刚才没有进度，请刷新页面后重试。');return}
-      var nodes=operationNodes('测活');
-      if(!nodes.length) return;
-      var cfg=getAliveSettings(), q=aliveQS(cfg);
-      GEO_RUNNING=true;
-      var total=nodes.length, done=0, ok=0, fail=0, errMap={};
-      st('开始对选中的 '+total+' 个节点测活：并发 '+cfg.concurrency+'，超时 '+cfg.timeout+'ms，0 / '+total);
-      function finish(){
-        GEO_RUNNING=false;
-        var autoCount=sv133AutoPick(nodes);
-        recalc(DATA);
-        render(DATA);
-        sv133Refine();
-        var es=Object.keys(errMap).slice(0,3).map(function(k){return k+'×'+errMap[k]}).join('；');
-        st('测活完成：已检测选中的 '+total+' 个节点，实际按 '+cfg.concurrency+' 并发调度，超时 '+cfg.timeout+'ms，可用 '+ok+'，不可用 '+fail+(sv133AutoEnabled()?'。已自动勾选可用节点 '+autoCount+' 个':'')+(es?'。失败原因：'+es:''));
-      }
-      runLimitedTasks(nodes,cfg.concurrency,function(n){
-        return loadJSON('/api/availability?t='+Date.now()+q,{method:'POST',body:JSON.stringify(n),headers:{'Content-Type':'application/json;charset=utf-8'}})
-          .then(function(r){
-            if(r&&r.ok&&r.alive){
-              n.aliveOK=true;
-              n.aliveLatency=r.latency||r.totalLatency||0;
-              n.aliveStatus=r.status;
-              n.aliveError='';
-              applyAliveName(n,cfg);
-              ok++;
-            }else{
-              var er=aliveErr((r&&r.error)||'检测失败');
-              n.aliveOK=false; n.aliveError=er; errMap[er]=(errMap[er]||0)+1; fail++;
-            }
-          })
-          .catch(function(e){
-            var er=aliveErr(e.message||String(e));
-            n.aliveOK=false; n.aliveError=er; errMap[er]=(errMap[er]||0)+1; fail++;
-          });
-      },function(_n,_i,_err,d,t){
-        if(d){done=d;recalc(DATA);apply();st('测活：'+done+' / '+t+'，并发 '+cfg.concurrency+'，可用 '+ok+'，不可用 '+fail)}
-      },finish);
-    }catch(e){GEO_RUNNING=false;st('测活启动失败：'+aliveErr(e&&e.message?e.message:String(e)))}
-  };
+  window.aliveTest=aliveTest;
 hook('afterApply', sv133Refine);
 window.addEventListener('DOMContentLoaded',function(){sv133Refine()});
 

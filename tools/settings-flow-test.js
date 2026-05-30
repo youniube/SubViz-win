@@ -10,7 +10,7 @@ const clientCode = fs.readFileSync(path.join(ROOT, 'src', 'client', 'app.js'), '
 apply=function(){};
 render=function(d){DATA=d;};
 recalc=function(d){return d;};
-st=function(s){window.__lastStatus=String(s||'');};
+st=function(s){window.__lastStatus=String(s||'');window.__statuses=window.__statuses||[];window.__statuses.push(window.__lastStatus);};
 window.__svSettingsTest={
   setData:function(d,s){DATA=d;SELECTED=s||{};},
   getData:function(){return DATA;},
@@ -21,6 +21,8 @@ window.__svSettingsTest={
   cleanNames:cleanNames,
   buildExportPayload:buildExportPayload,
   getAliveSettings:getAliveSettings,
+  getStatuses:function(){return window.__statuses||[];},
+  getAliveButtonText:function(){var b=document.getElementById('alive');return b&&b.textContent||'';},
   getLandingSettings:getLandingSettings,
   aliveQS:aliveQS,
   landingQS:landingQS,
@@ -167,6 +169,10 @@ function jsonResponse(r) { return JSON.parse(r.response.body || '{}'); }
   let r = await runClientConcurrency('alive', 8);
   assert(r.maxActive === 8, 'button-bound alive concurrency=8 should run 8 at most, got ' + r.maxActive);
   assert(/实际按 8 并发调度/.test(r.sandbox.window.__lastStatus), 'alive final status should report actual concurrency=8: ' + r.sandbox.window.__lastStatus);
+  assert(r.sandbox.window.__svSettingsTest.getStatuses().some(s => /测活中 0 \/ 12/.test(s)), 'alive should render initial 0 / 12 progress immediately');
+  assert(r.sandbox.window.__svSettingsTest.getStatuses().some(s => /测活中 1 \/ 12/.test(s)), 'alive progress should advance from 0 / 12 to 1 / 12');
+  assert(/测活完成 12 \/ 12/.test(r.sandbox.window.__lastStatus), 'alive final status should show completed / total: ' + r.sandbox.window.__lastStatus);
+  assert(r.sandbox.window.__svSettingsTest.getAliveButtonText() === '测活开始', 'alive button should restore to 测活开始 after completion');
   let q = parseQuery(r.calls[0]);
   assert(q.timeout === '1000', 'alive timeout should be sent as 1000ms');
   assert(q.url === 'https://example.com/custom_204', 'alive URL should use latest UI value');

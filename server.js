@@ -484,7 +484,7 @@ async function routeAPI(req, res, ctx, url) {
     } catch (e) { return sendJSON(res, { ok: false, landing: false, error: String(e && e.message || e) }, e.statusCode || 500); }
   }
 
-  if (req.method === 'POST' && p === '/api/availability') {
+  if (req.method === 'POST' && (p === '/api/availability' || p === '/api/availability/check')) {
     const abortController = new AbortController();
     req.on('aborted', () => abortController.abort());
     req.on('close', () => { if (!res.writableEnded && req.destroyed) abortController.abort(); });

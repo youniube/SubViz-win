@@ -18,7 +18,7 @@
     if (path === '/api/sample') { var r = parseSubscription(sampleText()); r.ok = true; return respondJSON(r); }
     if (path === '/api/geoip') return geoLookup(getQuery(url, 'host') || getQuery(url, 'ip'));
     if (path === '/api/landing') return landingLookup();
-    if (path === '/api/availability') return availabilityLookup();
+    if (path === '/api/availability' || path === '/api/availability/check') return availabilityLookup();
     if (path === '/api/gist-token/status') return gistTokenStatus();
     if (path === '/api/gist-token/save') return gistTokenSave();
     if (path === '/api/gist-token/delete') return gistTokenDelete();
