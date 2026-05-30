@@ -12,7 +12,7 @@ const parser = require('../lib/parser');
 const { normalizeGeoResult } = require('../lib/geo');
 const { MihomoManager, nodeToMihomoProxy } = require('../lib/mihomo-manager');
 const { availabilityStatusOK, firstExpectedStatus, availabilityCheck } = require('../lib/availability');
-const { createSubVizServer } = require('../server');
+const { createSubVizServer, tryFetchCandidate } = require('../server');
 const store = require('../lib/store');
 const landing = require('../lib/landing');
 
@@ -133,7 +133,10 @@ async function withUserAgentRemote(fn) {
       return;
     }
     if (ua.includes('Clash.Meta/')) {
-      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      // Some airports return a valid subscription body with a misleading
+      // text/html Content-Type. The fetch layer must parse the body first
+      // instead of treating the header alone as a failure.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(body);
       return;
     }
@@ -220,6 +223,16 @@ async function assertFixedUserAgentNoFallback() {
   }
 }
 
+async function assertHtmlContentTypeSubscriptionStillParses() {
+  await withRemoteSubscription('ss://YWVzLTEyOC1nY206cGFzc0AxLjEuMS4xOjQ0Mw#HK%2001', { 'Content-Type': 'text/html; charset=utf-8' }, async url => {
+    const r = await tryFetchCandidate(url, 'clash-meta');
+    assert.equal(r.ok, true, 'valid subscription body must parse even when Content-Type is text/html');
+    assert.equal(r.parsedNodeCount, 1);
+    assert.equal(r.looksLikeHtml, false, 'HTML detection should be based on body, not Content-Type alone');
+    assert.equal(r.diagnostics.contentTypeLooksLikeHtml, true, 'diagnostics should still record misleading HTML Content-Type');
+  });
+}
+
 function assertSurgeParserHelpers() {
   const r = parser.parseSubscription('[Proxy]\nHK 01 = ss, 1.1.1.1, 443, encrypt-method=aes-128-gcm, password=p');
   assert.equal(r.summary.total, 1, 'Surge parser should not throw splitProxyParts is not defined');
@@ -297,6 +310,7 @@ function assertStore() {
   await assertLandingDoesNotInject();
   await assertAutoUserAgentShortCircuit();
   await assertFixedUserAgentNoFallback();
+  await assertHtmlContentTypeSubscriptionStillParses();
   assertStore();
   await assertServerRoutes();
   console.log('node-app-test ok');

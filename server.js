@@ -247,16 +247,40 @@ function subscriptionUserAgent(client, customUA) {
   return SUBSCRIPTION_CLIENTS[client] || SUBSCRIPTION_CLIENTS.mihomo;
 }
 
-function looksLikeHtml(text, headers) {
+function contentTypeLooksLikeHtml(headers) {
   const ct = String((headers && (headers['content-type'] || headers['Content-Type'])) || '').toLowerCase();
-  const sample = String(text || '').trim().slice(0, 500).toLowerCase();
-  return ct.includes('text/html') || sample.startsWith('<!doctype html') || sample.startsWith('<html') || /<html[\s>]/i.test(sample);
+  return ct.includes('text/html');
+}
+
+function htmlSample(text, limit = 1000) {
+  return String(text || '').replace(/^\uFEFF/, '').trim().slice(0, limit);
+}
+
+function bodyLooksLikeHtml(text) {
+  const sample = htmlSample(text, 1000).toLowerCase();
+  if (!sample) return false;
+  return sample.startsWith('<!doctype html')
+    || sample.startsWith('<html')
+    || /^<(?:head|body|title|script|style|meta|div|main|section|form|center)(?:\s|>|\/)/i.test(sample)
+    || /<html[\s>]/i.test(sample.slice(0, 500));
+}
+
+function bodyLooksLikeErrorPage(text) {
+  const sample = htmlSample(text, 1000);
+  const lower = sample.toLowerCase();
+  if (!lower) return false;
+  if (bodyLooksLikeHtml(sample)) return true;
+  if (/^\s*\{[\s\S]{0,300}"(?:error|message|msg|detail)"\s*:/i.test(sample)
+      && /(?:login|sign in|登录|登陆|forbidden|unauthorized|not found|access denied|invalid token|token)/i.test(sample)) return true;
+  return /^(?:error|forbidden|unauthorized|not found|access denied|invalid token|token expired|请登录|登录后|登陆后|未授权|无权限)(?:\b|[:：\s])/i.test(lower);
+}
+
+function looksLikeHtml(text, headers) {
+  return bodyLooksLikeHtml(text);
 }
 
 function looksLikeErrorPage(text, headers) {
-  const sample = String(text || '').trim().slice(0, 1000).toLowerCase();
-  return looksLikeHtml(text, headers)
-    || /(?:login|sign in|登录|登陆|error|forbidden|unauthorized|not found|cloudflare|access denied)/i.test(sample);
+  return bodyLooksLikeErrorPage(text);
 }
 
 function fetchDiagnostics(sourceUrl, fetched, client, ua) {
@@ -272,6 +296,7 @@ function fetchDiagnostics(sourceUrl, fetched, client, ua) {
     client,
     clientName: clientDisplayName(client),
     looksLikeHtml: looksLikeHtml(body, headers),
+    contentTypeLooksLikeHtml: contentTypeLooksLikeHtml(headers),
     looksLikeErrorPage: looksLikeErrorPage(body, headers),
     bodyPreview: String(body || '').slice(0, 240),
   };
@@ -291,13 +316,17 @@ async function tryFetchCandidate(sourceUrl, client, customUA) {
     const diag = fetchDiagnostics(sourceUrl, fetched, client, ua);
     Object.assign(out, { fetched, diagnostics: diag, status: diag.status, statusText: diag.statusText, contentType: diag.contentType, bytes: diag.bytes, looksLikeHtml: diag.looksLikeHtml, looksLikeErrorPage: diag.looksLikeErrorPage, text: fetched && fetched.body || '' });
     if (out.status >= 400) { out.error = 'HTTP ' + out.status; return out; }
-    if (out.looksLikeErrorPage) { out.error = out.looksLikeHtml ? '内容疑似 HTML 页面' : '内容疑似错误页'; return out; }
+    if (out.looksLikeHtml) { out.error = '内容疑似 HTML 页面'; return out; }
+    if (out.looksLikeErrorPage) { out.error = '内容疑似错误页'; return out; }
     try {
       out.parsedResult = parser.parseSubscription(out.text || '');
       out.parsedNodeCount = parsedCountFromResult(out.parsedResult);
       diag.parsedNodeCount = out.parsedNodeCount;
       out.ok = out.parsedNodeCount > 0;
-      if (!out.ok) out.error = '解析节点 0';
+      if (!out.ok) {
+        if (diag.contentTypeLooksLikeHtml) { out.looksLikeHtml = true; diag.looksLikeHtml = true; out.error = '内容疑似 HTML 页面'; }
+        else out.error = '解析节点 0';
+      }
       return out;
     } catch (e) {
       out.error = String(e && e.message || e);
@@ -324,7 +353,7 @@ function logCandidateFailure(result) {
 function makeFetchFailureResponse(fetchedResult, sourceUrl) {
   const selected = fetchedResult && (fetchedResult.selected || fetchedResult.last);
   const diag = selected && selected.diagnostics || null;
-  return { ok: false, error: 'subscription fetch failed', sourceUrl, fetchDiagnostics: diag, candidates: fetchedResult && fetchedResult.candidateResults ? fetchedResult.candidateResults.map(r => ({ client:r.client, clientName:r.clientName, status:r.status, contentType:r.contentType, bytes:r.bytes, looksLikeHtml:r.looksLikeHtml, looksLikeErrorPage:r.looksLikeErrorPage, parsedNodeCount:r.parsedNodeCount, error:r.error })) : [] };
+  return { ok: false, error: 'subscription fetch failed', sourceUrl, fetchDiagnostics: diag, candidates: fetchedResult && fetchedResult.candidateResults ? fetchedResult.candidateResults.map(r => ({ client:r.client, clientName:r.clientName, status:r.status, contentType:r.contentType, bytes:r.bytes, looksLikeHtml:r.looksLikeHtml, contentTypeLooksLikeHtml:r.diagnostics && r.diagnostics.contentTypeLooksLikeHtml, looksLikeErrorPage:r.looksLikeErrorPage, parsedNodeCount:r.parsedNodeCount, error:r.error })) : [] };
 }
 
 async function fetchSubscription(sourceUrl, client, customUA) {
