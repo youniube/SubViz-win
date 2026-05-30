@@ -161,7 +161,7 @@ const sandbox = {
   btoa(s) { return Buffer.from(String(s), 'binary').toString('base64'); },
   atob(s) { return Buffer.from(String(s), 'base64').toString('binary'); },
   encodeURIComponent, decodeURIComponent, escape, unescape,
-  JSON, Date, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise,
+  JSON, Date, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, AbortController,
   Symbol, Set, Map, parseInt, parseFloat, isNaN, isFinite
 };
 vm.createContext(sandbox);
@@ -173,7 +173,7 @@ vm.runInContext(code, sandbox, { filename: 'src/client/app.js', timeout: 2000 })
   'sv132ById', 'sv133ById', 'sv135ById', 'sv136ById',
   'sv136EnsureDashboard', 'sv136UpdateHealth', 'sv136Refine', 'sv136InstallAutoParse',
   'SV136_PAGE_SIZE', 'sv136ViewLimit', 'sv136LastKey',
-  'gistChecked', 'gistById', 'gistVal', 'buildExportPayload'
+  'gistChecked', 'gistById', 'gistVal', 'buildExportPayload', 'selectAllNodes', 'cancelAvailability'
 ].forEach(function (name) {
   const t = vm.runInContext('typeof ' + name, sandbox);
   assert(t !== 'undefined', 'expected identifier `' + name + '` to be defined, got typeof ' + t);
@@ -245,14 +245,47 @@ assert(countNeedle((protocolTitle.innerHTML || protocolTitle.textContent || '') 
 assert(countNeedle((countryTitle.innerHTML || countryTitle.textContent || '') + (els.countries.innerHTML || ''), '国家 / 地区分布') === 1,
   'country chart title should appear exactly once after render');
 
+
+// ---- 2.1) 节点数量统计 / 隐藏重复节点 / 全选全部节点 ----
+const duplicateData = {
+  ok: true,
+  nodes: [
+    { name: 'HK 01', protocol: 'ss', server: '1.1.1.1', port: '443', countryCode: 'HK', country: '香港', network: 'tcp', tls: '', fingerprint: 'same', extra: { type: 'ss', cipher: 'aes-128-gcm', password: 'p' } },
+    { name: 'HK 01 copy', protocol: 'ss', server: '1.1.1.1', port: '443', countryCode: 'HK', country: '香港', network: 'tcp', tls: '', fingerprint: 'same', extra: { type: 'ss', cipher: 'aes-128-gcm', password: 'p' } },
+    { name: 'US 01', protocol: 'trojan', server: '2.2.2.2', port: '443', countryCode: 'US', country: '美国', network: 'tcp', tls: 'true', fingerprint: 'unique', extra: { type: 'trojan', password: 'demo' } }
+  ],
+  summary: { total: 3, unique: 2, duplicates: 1, protocols: 2, countries: 2 },
+  stats: { byProtocol: [], byCountry: [], byCountryCode: [], bySourceFormat: [] }
+};
+els.unique.checked = true;
+vm.runInContext('render(' + JSON.stringify(duplicateData) + ');', sandbox);
+assert(/原始 3 \/ 唯一 2 \/ 重复 1 \/ 当前显示 2/.test(els.count.textContent || ''),
+  'count line should expose raw/unique/duplicate/current counts when duplicates are hidden: '+(els.count.textContent||''));
+vm.runInContext('clearSelected(); selectCurrent();', sandbox);
+assert(vm.runInContext('selectedNodes().length', sandbox) === 2,
+  '全选当前筛选 should select filtered unique nodes only');
+els.unique.checked = false;
+vm.runInContext('apply(); clearSelected(); selectAllNodes();', sandbox);
+assert(vm.runInContext('selectedNodes().length', sandbox) === 3,
+  '全选全部节点 should select all raw nodes after hiding duplicates is turned off');
+
+// ---- 2.2) 停止测活入口不应报普通错误，并会调用 AbortController.abort ----
+els.alive.textContent = '测活开始';
+vm.runInContext('AVAILABILITY_RUNNING=true; AVAILABILITY_ABORT_CONTROLLER=new AbortController(); AVAILABILITY_PROGRESS={completed:1,total:3}; aliveTest();', sandbox);
+assert(vm.runInContext('AVAILABILITY_RUNNING', sandbox) === false,
+  'calling aliveTest while running should stop the current availability task');
+assert(/测活已停止/.test(els.status.textContent || ''),
+  'stopping availability should show stopped status instead of generic failure');
+
 // ---- 3) sv136 dashboard 系列直调不抛 ----
 vm.runInContext('sv136EnsureDashboard(); sv136UpdateHealth(filtered()); sv136Refine();', sandbox);
 assert(swallowedErrors.length === 0,
   'sv136 dashboard helpers leaked errors: ' + JSON.stringify(swallowedErrors));
 
 // ---- 4) Gist 上传 payload 构造（之前 Bug 2 的核心场景） ----
-// 全选当前节点，让 buildExportPayload 不报"未选"
-vm.runInContext('if (typeof selectCurrent === "function") selectCurrent();', sandbox);
+// 恢复普通两节点数据，并全选当前节点，让 buildExportPayload 不报"未选"
+els.unique.checked = true;
+vm.runInContext('render(' + JSON.stringify(data) + '); clearSelected(); if (typeof selectCurrent === "function") selectCurrent();', sandbox);
 
 doc.getElementById('gistName').value = 'my-subs';
 doc.getElementById('gistFilename').value = 'subs.yaml';

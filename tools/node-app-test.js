@@ -120,6 +120,112 @@ async function withRemoteSubscription(body, headers, fn) {
   }
 }
 
+
+async function withUserAgentRemote(fn) {
+  const requests = [];
+  const body = 'ss://YWVzLTEyOC1nY206cGFzc0AxLjEuMS4xOjQ0Mw#HK%2001';
+  const server = http.createServer((req, res) => {
+    const ua = String(req.headers['user-agent'] || '');
+    requests.push(ua);
+    if (ua.includes('Mihomo/')) {
+      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<html>not found</html>');
+      return;
+    }
+    if (ua.includes('Clash.Meta/')) {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(body);
+      return;
+    }
+    if (ua.includes('Shadowrocket/')) {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(body);
+      return;
+    }
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('blocked');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    return await fn('http://127.0.0.1:' + server.address().port + '/sub', requests);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+async function assertAutoUserAgentShortCircuit() {
+  let injected = 0;
+  const fake = {
+    isReady: async () => false,
+    lastError: 'disabled in test',
+    mixedPort: 17890,
+    socksPort: 17891,
+    httpPort: 17892,
+    apiPort: 19090,
+    injectNodes: async nodes => {
+      injected++;
+      return { ok: true, count: nodes.length, writtenCount: nodes.length, diagnostics: {
+        parsedCount: nodes.length,
+        writtenCount: nodes.length,
+        mihomoNodeCount: nodes.length + 1,
+        testableCount: nodes.length,
+        missingCount: 0,
+        conversionSkippedCount: 0,
+        conversionSkippedReasons: {},
+      } };
+    },
+  };
+  const server = createSubVizServer({ mihomoManager: fake });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    await withUserAgentRemote(async (remoteUrl, requests) => {
+      const cap = captureConsoleLogs();
+      try {
+        const pulled = await fetch(`http://127.0.0.1:${port}/api/analyze?url=${encodeURIComponent(remoteUrl)}&client=auto`).then(r => r.json());
+        assert.equal(pulled.ok, true);
+        assert.equal(pulled.selectedFetchClientName, 'Clash.Meta');
+        assert.equal(injected, 1, 'auto UA should inject into Mihomo only once');
+        assert.equal(requests.length, 2, 'auto UA should stop after Clash.Meta succeeds');
+        assert(requests[0].includes('Mihomo/'), 'first candidate should be Mihomo');
+        assert(requests[1].includes('Clash.Meta/'), 'second candidate should be Clash.Meta');
+        assert(!requests.some(ua => ua.includes('Shadowrocket/')), 'must not continue to Shadowrocket after success');
+        assert(cap.logs.some(l => l.includes('自动 UA 命中：Clash.Meta')), 'auto UA hit log should identify Clash.Meta');
+      } finally {
+        cap.restore();
+      }
+    });
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+async function assertFixedUserAgentNoFallback() {
+  const fake = {
+    isReady: async () => false,
+    injectNodes: async nodes => ({ ok: true, count: nodes.length, writtenCount: nodes.length, diagnostics: { parsedCount: nodes.length, writtenCount: nodes.length, mihomoNodeCount: nodes.length + 1, testableCount: nodes.length, missingCount: 0, conversionSkippedCount: 0 } }),
+  };
+  const server = createSubVizServer({ mihomoManager: fake });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    await withUserAgentRemote(async (remoteUrl, requests) => {
+      const pulled = await fetch(`http://127.0.0.1:${port}/api/analyze?url=${encodeURIComponent(remoteUrl)}&client=clash-meta`).then(r => r.json());
+      assert.equal(pulled.ok, true);
+      assert.equal(requests.length, 1, 'fixed UA mode must request once only');
+      assert(requests[0].includes('Clash.Meta/'), 'fixed client should use Clash.Meta UA');
+    });
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+function assertSurgeParserHelpers() {
+  const r = parser.parseSubscription('[Proxy]\nHK 01 = ss, 1.1.1.1, 443, encrypt-method=aes-128-gcm, password=p');
+  assert.equal(r.summary.total, 1, 'Surge parser should not throw splitProxyParts is not defined');
+  assert.equal(r.nodes[0].protocol, 'ss');
+}
+
 async function assertServerRoutes() {
   const fake = {
     isReady: async () => false,
@@ -184,10 +290,13 @@ function assertStore() {
 
 (async () => {
   assertParser();
+  assertSurgeParserHelpers();
   assertGeo();
   assertMihomoMapping();
   await assertAvailability();
   await assertLandingDoesNotInject();
+  await assertAutoUserAgentShortCircuit();
+  await assertFixedUserAgentNoFallback();
   assertStore();
   await assertServerRoutes();
   console.log('node-app-test ok');

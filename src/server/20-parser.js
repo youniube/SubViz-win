@@ -144,7 +144,12 @@
   }
   function setFingerprint(n) {
     var e = (n && n.extra) || {};
-    n.fingerprint = [n.protocol, n.server, n.port, n.network, n.tls, e.sni, e.Host, e.path, e.cipher, e.uuid || n.id || e.password].join('|').toLowerCase();
+    var ws = e['ws-opts'] || e.wsOpts || e.ws || e.ws_opts || {};
+    var wsHeaders = (ws && ws.headers) || {};
+    var reality = e['reality-opts'] || e.realityOpts || e.reality_opts || e.reality || {};
+    var grpc = e['grpc-opts'] || e.grpcOpts || e.grpc_opts || {};
+    function fpv() { for (var i = 0; i < arguments.length; i++) { var v = arguments[i]; if (v !== null && v !== undefined && String(v) !== '') return clean(v); } return ''; }
+    n.fingerprint = [n.protocol, n.server, n.port, fpv(e.uuid, e.id, n.id, e.password, e.pass, e.psk), fpv(n.network, e.network, e.net, e.transport), fpv(n.tls, e.tls, e.security), fpv(e.sni, e.servername, e.serverName, e['server-name'], e.server_name), fpv(e.Host, e.host, ws.host, wsHeaders.Host, wsHeaders.host), fpv(e.path, e['ws-path'], ws.path), fpv(e['reality-public-key'], e['public-key'], e.publicKey, e.pbk, reality['public-key'], reality.publicKey, reality.pbk), fpv(e['reality-short-id'], e['short-id'], e.shortId, e.sid, reality['short-id'], reality.shortId, reality.sid), fpv(e['grpc-service-name'], e.serviceName, e['service-name'], grpc['grpc-service-name'], grpc['service-name'], grpc.serviceName), fpv(e.cipher, e.method, e['encrypt-method']), fpv(e.flow)].join('|').toLowerCase();
     return n;
   }
 
@@ -207,6 +212,8 @@
     });
     return obj;
   }
+  function splitProxyParts(line) { return splitTopLevel(String(line || ''), ',').map(function (x) { return clean(x); }); }
+  function parseKeyValueParts(parts, startIndex) { var o = {}; for (var i = startIndex || 0; i < (parts || []).length; i++) { var p = clean(parts[i]); if (!p) continue; var eq = p.indexOf('='); if (eq > 0) { var k = clean(p.slice(0, eq)); var v = clean(p.slice(eq + 1)); o[k] = v; } } return o; }
   var REAL_PROXY_TYPES = { ss:1, ssr:1, vmess:1, vless:1, trojan:1, hysteria:1, hysteria2:1, hy2:1, tuic:1, snell:1, socks:1, socks5:1, http:1, https:1, anytls:1 };
   var GROUP_TYPES = { select:1, 'url-test':1, fallback:1, 'load-balance':1, relay:1, smart:1, direct:1, reject:1, pass:1 };
   function isRealProxyObject(obj) {
@@ -393,8 +400,9 @@
   }
   function analyzeNodes(nodes) {
     nodes = nodes || [];
-    var seen = {}, dupMap = {}, unique = [];
-    nodes.forEach(function (n) { setFingerprint(n); if (!seen[n.fingerprint]) { seen[n.fingerprint] = true; unique.push(n); } else { if (!dupMap[n.fingerprint]) dupMap[n.fingerprint] = [n]; dupMap[n.fingerprint].push(n); } });
+    var seen = {}, dupMap = {}, unique = [], nameSeen = {};
+    nodes.forEach(function (n) { setFingerprint(n); });
+    nodes.forEach(function (n) { var baseName = clean(n.name || n.rawName || n.originalName || n.server || 'node'); if (!n.originalName) n.originalName = baseName; if (!n.rawName) n.rawName = baseName; nameSeen[baseName] = (nameSeen[baseName] || 0) + 1; if (nameSeen[baseName] > 1) { n.name = baseName + ' #' + nameSeen[baseName]; if (n.extra && typeof n.extra === 'object') n.extra.name = n.name; } else n.name = baseName; if (!seen[n.fingerprint]) { seen[n.fingerprint] = true; unique.push(n); } else { if (!dupMap[n.fingerprint]) dupMap[n.fingerprint] = [n]; dupMap[n.fingerprint].push(n); } });
     var byP = {}, byC = {}, byCC = {}, byF = {};
     nodes.forEach(function (n) { byP[n.protocol] = (byP[n.protocol] || 0) + 1; byC[n.country] = (byC[n.country] || 0) + 1; byCC[n.countryCode] = (byCC[n.countryCode] || 0) + 1; byF[n.sourceFormat] = (byF[n.sourceFormat] || 0) + 1; });
     function toArr(o) { return Object.keys(o).map(function (k) { return { key: k, count: o[k] }; }).sort(function (a,b) { return b.count - a.count; }); }

@@ -170,12 +170,12 @@ function logMihomoDiagnostics(result) {
 }
 
 function logAnalysisDiagnostics(result, meta) {
-  if (meta && meta.fetchDiagnostics) logFetchDiagnostics(meta.fetchDiagnostics);
+  if (meta && meta.fetchDiagnostics && !meta.skipFetchLog) logFetchDiagnostics(meta.fetchDiagnostics);
   logMihomoDiagnostics(result);
 }
 
 async function parseAndInject(text, sourceUrl, mihomo, meta = {}) {
-  const result = parser.parseSubscription(text || '');
+  const result = meta.parsedResult || parser.parseSubscription(text || '');
   result.ok = true;
   if (sourceUrl) result.sourceUrl = sourceUrl;
   if (meta.fetchDiagnostics) {
@@ -189,6 +189,11 @@ async function parseAndInject(text, sourceUrl, mihomo, meta = {}) {
       ? 'subscription fetch returned HTML/error page; try another subscription client User-Agent'
       : 'subscription parsed, but no proxy nodes were found';
   }
+  const summary = result.summary || {};
+  const rawTotal = Number(summary.total || ((result.nodes || []).length) || 0);
+  const uniqueTotal = Number(summary.unique || rawTotal);
+  const duplicateTotal = Number(summary.duplicates || Math.max(0, rawTotal - uniqueTotal));
+  logConsoleDiag('analyze', '节点统计：原始 ' + rawTotal + '，唯一 ' + uniqueTotal + '，重复 ' + duplicateTotal + '，当前显示 ' + uniqueTotal);
   if (mihomo && result.nodes && result.nodes.length) {
     result.mihomo = await mihomo.injectNodes(result.nodes).catch(e => ({ ok: false, error: String(e && e.message || e) }));
     if (result.mihomo && result.mihomo.diagnostics) result.mihomoDiagnostics = result.mihomo.diagnostics;
@@ -209,12 +214,31 @@ const SUBSCRIPTION_CLIENTS = {
   subviz: DEFAULT_USER_AGENT,
 };
 
+const SUBSCRIPTION_CLIENT_LABELS = {
+  mihomo: 'Mihomo',
+  'clash-meta': 'Clash.Meta',
+  clash: 'Clash',
+  'sing-box': 'sing-box',
+  surge: 'Surge',
+  loon: 'Loon',
+  stash: 'Stash',
+  shadowrocket: 'Shadowrocket',
+  'quantumult-x': 'Quantumult X',
+  subviz: 'SubViz',
+  custom: '自定义 UA',
+};
+
 function normalizeClientName(v) {
   v = clean(v).toLowerCase();
   if (v === 'clashmeta' || v === 'clash.meta') return 'clash-meta';
   if (v === 'singbox') return 'sing-box';
   if (v === 'quanx' || v === 'quantumultx') return 'quantumult-x';
   return v || 'mihomo';
+}
+
+function clientDisplayName(v) {
+  v = normalizeClientName(v);
+  return SUBSCRIPTION_CLIENT_LABELS[v] || v || 'Mihomo';
 }
 
 function subscriptionUserAgent(client, customUA) {
@@ -229,6 +253,12 @@ function looksLikeHtml(text, headers) {
   return ct.includes('text/html') || sample.startsWith('<!doctype html') || sample.startsWith('<html') || /<html[\s>]/i.test(sample);
 }
 
+function looksLikeErrorPage(text, headers) {
+  const sample = String(text || '').trim().slice(0, 1000).toLowerCase();
+  return looksLikeHtml(text, headers)
+    || /(?:login|sign in|登录|登陆|error|forbidden|unauthorized|not found|cloudflare|access denied)/i.test(sample);
+}
+
 function fetchDiagnostics(sourceUrl, fetched, client, ua) {
   const body = fetched && fetched.body || '';
   const headers = fetched && fetched.headers || {};
@@ -240,36 +270,95 @@ function fetchDiagnostics(sourceUrl, fetched, client, ua) {
     bytes: Buffer.byteLength(body, 'utf8'),
     userAgent: ua,
     client,
+    clientName: clientDisplayName(client),
     looksLikeHtml: looksLikeHtml(body, headers),
+    looksLikeErrorPage: looksLikeErrorPage(body, headers),
     bodyPreview: String(body || '').slice(0, 240),
   };
+}
+
+function parsedCountFromResult(result) {
+  return result && result.summary && Number(result.summary.total) || (result && result.nodes && result.nodes.length) || 0;
+}
+
+async function tryFetchCandidate(sourceUrl, client, customUA) {
+  client = normalizeClientName(client);
+  const ua = subscriptionUserAgent(client, customUA);
+  const label = clientDisplayName(client);
+  const out = { ok:false, client, clientName:label, userAgent:ua, status:0, statusText:'', contentType:'', bytes:0, looksLikeHtml:false, looksLikeErrorPage:false, parsedNodeCount:0, text:'', parsedResult:null, fetched:null, diagnostics:null, error:'' };
+  try {
+    const fetched = await fetchText(sourceUrl, { timeout: 30000, headers: { 'User-Agent': ua, 'Accept': '*/*', 'Cache-Control': 'no-cache' } });
+    const diag = fetchDiagnostics(sourceUrl, fetched, client, ua);
+    Object.assign(out, { fetched, diagnostics: diag, status: diag.status, statusText: diag.statusText, contentType: diag.contentType, bytes: diag.bytes, looksLikeHtml: diag.looksLikeHtml, looksLikeErrorPage: diag.looksLikeErrorPage, text: fetched && fetched.body || '' });
+    if (out.status >= 400) { out.error = 'HTTP ' + out.status; return out; }
+    if (out.looksLikeErrorPage) { out.error = out.looksLikeHtml ? '内容疑似 HTML 页面' : '内容疑似错误页'; return out; }
+    try {
+      out.parsedResult = parser.parseSubscription(out.text || '');
+      out.parsedNodeCount = parsedCountFromResult(out.parsedResult);
+      diag.parsedNodeCount = out.parsedNodeCount;
+      out.ok = out.parsedNodeCount > 0;
+      if (!out.ok) out.error = '解析节点 0';
+      return out;
+    } catch (e) {
+      out.error = String(e && e.message || e);
+      diag.parseError = out.error;
+      return out;
+    }
+  } catch (e) {
+    out.error = String(e && e.message || e);
+    out.diagnostics = { url: sourceUrl, status: 0, statusText: '', contentType: '', bytes: 0, userAgent: ua, client, clientName: label, looksLikeHtml: false, looksLikeErrorPage: false, parsedNodeCount: 0, error: out.error };
+    return out;
+  }
+}
+
+function logCandidateFailure(result) {
+  if (!result) return;
+  const name = result.clientName || clientDisplayName(result.client);
+  if (result.status >= 400) return logConsoleDiag('fetch', 'UA ' + name + ' 失败：HTTP ' + result.status + '，可能需要更换客户端 UA');
+  if (result.looksLikeHtml || result.looksLikeErrorPage) return logConsoleDiag('fetch', 'UA ' + name + ' 失败：内容疑似 HTML 页面');
+  if (result.error && result.diagnostics && result.diagnostics.parseError) return logConsoleDiag('fetch', 'UA ' + name + ' 解析异常：' + result.error);
+  if (result.error) return logConsoleDiag('fetch', 'UA ' + name + ' 失败：' + result.error);
+  logConsoleDiag('fetch', 'UA ' + name + ' 失败：解析节点 ' + (result.parsedNodeCount || 0));
+}
+
+function makeFetchFailureResponse(fetchedResult, sourceUrl) {
+  const selected = fetchedResult && (fetchedResult.selected || fetchedResult.last);
+  const diag = selected && selected.diagnostics || null;
+  return { ok: false, error: 'subscription fetch failed', sourceUrl, fetchDiagnostics: diag, candidates: fetchedResult && fetchedResult.candidateResults ? fetchedResult.candidateResults.map(r => ({ client:r.client, clientName:r.clientName, status:r.status, contentType:r.contentType, bytes:r.bytes, looksLikeHtml:r.looksLikeHtml, looksLikeErrorPage:r.looksLikeErrorPage, parsedNodeCount:r.parsedNodeCount, error:r.error })) : [] };
 }
 
 async function fetchSubscription(sourceUrl, client, customUA) {
   client = normalizeClientName(client);
   const autoMode = client === 'auto';
-  const tryClients = autoMode
-    ? ['mihomo', 'clash-meta', 'clash', 'sing-box', 'surge', 'loon', 'stash', 'shadowrocket', 'subviz']
-    : [client];
+  const tryClients = autoMode ? ['mihomo', 'clash-meta', 'clash', 'sing-box', 'surge', 'loon', 'stash', 'shadowrocket', 'quantumult-x', 'subviz'] : [client];
+  const candidateResults = [];
+  let selected = null;
   let last = null;
   for (const c of tryClients) {
-    const ua = subscriptionUserAgent(c, customUA);
-    const fetched = await fetchText(sourceUrl, {
-      timeout: 30000,
-      headers: {
-        'User-Agent': ua,
-        'Accept': '*/*',
-        'Cache-Control': 'no-cache',
-      },
-    });
-    const diag = fetchDiagnostics(sourceUrl, fetched, c, ua);
-    last = { fetched, diagnostics: diag };
-    if (!autoMode) return last;
-    if (fetched.status >= 400 || diag.looksLikeHtml) continue;
-    diag.parsedNodeCount = parsedNodeCount(fetched.body || '');
-    if (diag.parsedNodeCount > 0) return last;
+    const result = await tryFetchCandidate(sourceUrl, c, customUA);
+    candidateResults.push(result);
+    last = result;
+    if (result.ok && result.parsedNodeCount > 0) {
+      selected = result;
+      if (autoMode) logConsoleDiag('fetch', '自动 UA 命中：' + result.clientName + '，HTTP ' + result.status + '，解析节点 ' + result.parsedNodeCount + '，停止重试');
+      break;
+    }
+    if (autoMode) logCandidateFailure(result);
   }
-  return last;
+  return { ok: !!selected, autoMode, selected, last, candidateResults, error: selected ? '' : 'no candidate parsed proxy nodes' };
+}
+
+async function analyzeFetchedSubscription(fetchedResult, sourceUrl, mihomo) {
+  if (!fetchedResult || !fetchedResult.ok || !fetchedResult.selected) {
+    if (fetchedResult && !fetchedResult.autoMode) logCandidateFailure(fetchedResult.last);
+    return { status: 502, body: makeFetchFailureResponse(fetchedResult, sourceUrl) };
+  }
+  const selected = fetchedResult.selected;
+  const diag = selected.diagnostics || fetchDiagnostics(sourceUrl, selected.fetched, selected.client, selected.userAgent);
+  diag.parsedNodeCount = selected.parsedNodeCount;
+  const body = await parseAndInject(selected.text || '', sourceUrl, mihomo, { fetchDiagnostics: diag, parsedResult: selected.parsedResult, skipFetchLog: !!fetchedResult.autoMode });
+  if (fetchedResult.autoMode) { body.selectedFetchClient = selected.client; body.selectedFetchClientName = selected.clientName; body.autoUserAgent = true; }
+  return { status: 200, body };
 }
 async function routeAPI(req, res, ctx, url) {
   const { mihomo } = ctx;
@@ -314,13 +403,8 @@ async function routeAPI(req, res, ctx, url) {
     if (!sourceUrl) return sendJSON(res, { ok: false, error: 'missing url' }, 400);
     try {
       const fetchedResult = await fetchSubscription(sourceUrl, client, customUA);
-      const fetched = fetchedResult && fetchedResult.fetched || { status: 0, body: '', headers: {} };
-      const diag = fetchedResult && fetchedResult.diagnostics || fetchDiagnostics(sourceUrl, fetched, client, subscriptionUserAgent(client, customUA));
-      if (fetched.status >= 400) {
-        logFetchDiagnostics(diag);
-        return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag, bodyPreview: String(fetched.body || '').slice(0, 240) }, 502);
-      }
-      return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo, { fetchDiagnostics: diag }));
+      const analyzed = await analyzeFetchedSubscription(fetchedResult, sourceUrl, mihomo);
+      return sendJSON(res, analyzed.body, analyzed.status);
     } catch (e) {
       logConsoleDiag('fetch', '订阅拉取失败：' + String(e && e.message || e));
       return sendJSON(res, { ok: false, error: String(e && e.message || e), sourceUrl }, 502);
@@ -335,10 +419,8 @@ async function routeAPI(req, res, ctx, url) {
       const customUA = clean(body.userAgent || body.ua);
       if (!sourceUrl) return sendJSON(res, { ok: false, error: 'missing url' }, 400);
       const fetchedResult = await fetchSubscription(sourceUrl, client, customUA);
-      const fetched = fetchedResult && fetchedResult.fetched || { status: 0, body: '', headers: {} };
-      const diag = fetchedResult && fetchedResult.diagnostics || fetchDiagnostics(sourceUrl, fetched, client, subscriptionUserAgent(client, customUA));
-      if (fetched.status >= 400) { logFetchDiagnostics(diag); return sendJSON(res, { ok: false, error: 'remote subscription HTTP ' + fetched.status, status: fetched.status, sourceUrl, fetchDiagnostics: diag }, 502); }
-      return sendJSON(res, await parseAndInject(fetched.body || '', sourceUrl, mihomo, { fetchDiagnostics: diag }));
+      const analyzed = await analyzeFetchedSubscription(fetchedResult, sourceUrl, mihomo);
+      return sendJSON(res, analyzed.body, analyzed.status);
     } catch (e) {
       logConsoleDiag('fetch', '订阅拉取失败：' + String(e && e.message || e));
       return sendJSON(res, { ok: false, error: String(e && e.message || e) }, e.statusCode || 502);
@@ -374,8 +456,13 @@ async function routeAPI(req, res, ctx, url) {
   }
 
   if (req.method === 'POST' && p === '/api/availability') {
+    const abortController = new AbortController();
+    req.on('aborted', () => abortController.abort());
+    req.on('close', () => { if (!res.writableEnded && req.destroyed) abortController.abort(); });
+    res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
     try {
       const body = parseJSONBody(await readBody(req, 1024 * 1024));
+      if (abortController.signal.aborted) return;
       const r = await availability.availabilityCheck(body, {
         mihomoManager: mihomo,
         url: url.searchParams.get('url') || body.url,
@@ -383,10 +470,15 @@ async function routeAPI(req, res, ctx, url) {
         timeout: parseInteger(url.searchParams.get('timeout') || body.timeout, 3000, 200, 30000),
         retries: parseInteger(url.searchParams.get('retries') || body.retries, 1, 0, 3),
         retryDelay: parseInteger(url.searchParams.get('retry_delay') || body.retryDelay, 1000, 0, 5000),
+        signal: abortController.signal,
       });
+      if (abortController.signal.aborted || (r && r.cancelled)) return sendJSON(res, r || { ok: false, cancelled: true }, 499);
       const statusCode = (r.ok || r.shouldCountAsDead === false) ? 200 : 502;
       return sendJSON(res, r, statusCode);
-    } catch (e) { return sendJSON(res, { ok: false, alive: false, category: 'api_error', shouldCountAsDead: true, error: String(e && e.message || e), statusCode: e.statusCode || e.status || 0 }, e.statusCode || 500); }
+    } catch (e) {
+      if (abortController.signal.aborted) return sendJSON(res, { ok: false, cancelled: true, alive: false, category: 'cancelled', shouldCountAsDead: false, error: '测活已取消' }, 499);
+      return sendJSON(res, { ok: false, alive: false, category: 'api_error', shouldCountAsDead: true, error: String(e && e.message || e), statusCode: e.statusCode || e.status || 0 }, e.statusCode || 500);
+    }
   }
 
   if (req.method === 'GET' && p === '/api/gist-token/status') {
@@ -457,4 +549,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createSubVizServer, parseAndInject, VERSION };
+module.exports = { createSubVizServer, parseAndInject, fetchSubscription, tryFetchCandidate, analyzeFetchedSubscription, VERSION };
