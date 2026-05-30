@@ -202,9 +202,21 @@ const data = {
 
 ['cards', 'protocols', 'countries', 'tbody', 'count', 'status', 'pf', 'cf',
  'exportType', 'gistName', 'gistFilename', 'gistId', 'gistToken', 'gistPublic',
- 'gistUpload', 'gistRawUrl', 'gistPageUrl', 'gistTokenStatus', 'url', 'raw'].forEach(function (id) {
+ 'gistUpload', 'gistRawUrl', 'gistPageUrl', 'gistTokenStatus', 'url', 'raw',
+ 'aliveUrl', 'aliveStatus', 'aliveCon', 'aliveTimeout', 'aliveRetries', 'aliveRetryDelay',
+ 'landingCon', 'landingTimeout', 'landingRetries'].forEach(function (id) {
   doc.getElementById(id);
 });
+
+els.aliveUrl.value = 'http://connectivitycheck.platform.hicloud.com/generate_204';
+els.aliveStatus.value = '204';
+els.aliveCon.value = '5';
+els.aliveTimeout.value = '3000';
+els.aliveRetries.value = '1';
+els.aliveRetryDelay.value = '1000';
+els.landingCon.value = '2';
+els.landingTimeout.value = '5000';
+els.landingRetries.value = '1';
 
 // 模拟 index.html 中统计卡片的外层标题，防止增强渲染把标题再塞进内容区导致重复。
 const protocolCard = makeEl('div');
@@ -270,13 +282,15 @@ assert(vm.runInContext('selectedNodes().length', sandbox) === 3,
   '全选全部节点 should select all raw nodes after hiding duplicates is turned off');
 
 // ---- 2.2) 测活按钮必须立即进入运行态，并可立即停止 ----
-els.alive.textContent = '测活开始';
+els.alive.textContent = '开始测活';
 sandbox.fetch = function () { return new Promise(function () {}); };
 vm.runInContext('render(' + JSON.stringify(data) + '); clearSelected(); selectCurrent(); aliveTest();', sandbox);
 assert(vm.runInContext('AVAILABILITY_RUNNING', sandbox) === true,
-  'clicking 测活开始 should immediately set availability running state');
-assert(els.alive.textContent === '停止测活',
-  'alive button should immediately switch to 停止测活');
+  'clicking 开始测活 should immediately set availability running state');
+assert(els.alive.textContent === '开始测活' && els.alive.disabled === true,
+  'start availability button should stay labelled 开始测活 and become disabled while running');
+assert(doc.getElementById('stopAlive').hidden === false,
+  '停止测活 button should be visible while availability is running');
 assert(/测活中 0 \/ 2/.test(els.status.textContent || ''),
   'status should immediately show progress 0 / 2: ' + (els.status.textContent || ''));
 assert(vm.runInContext('selectedNodes().length', sandbox) === 2,
@@ -286,8 +300,10 @@ assert(vm.runInContext('__abortCalls', sandbox) === 1,
   'clicking 停止测活 should call AbortController.abort');
 assert(vm.runInContext('AVAILABILITY_RUNNING', sandbox) === false,
   'calling aliveTest while running should stop the current availability task');
-assert(els.alive.textContent === '测活开始',
-  'stopping availability should restore button text to 测活开始');
+assert(els.alive.textContent === '开始测活' && els.alive.disabled === false,
+  'stopping availability should restore start button state');
+assert(doc.getElementById('stopAlive').hidden === true,
+  '停止测活 button should hide after stopping');
 assert(/测活已停止/.test(els.status.textContent || ''),
   'stopping availability should show stopped status instead of generic failure');
 assert(!/失败/.test(els.status.textContent || ''),
