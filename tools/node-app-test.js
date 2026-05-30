@@ -83,7 +83,12 @@ async function assertAvailability() {
   const bad = await availabilityCheck({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: failFake, statusExpr: '204', retries: 0 });
   assert.equal(bad.ok, false);
   assert.equal(bad.category, 'timeout');
+  const missingFake = Object.assign({}, fake, { findLoadedProxyName: () => ({ found: false, name: 'missing-node', candidates: ['missing-node'] }) });
+  const missing = await availabilityCheck({ name: 'missing-node', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: missingFake, statusExpr: '204', retries: 0 });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'node_not_found_in_mihomo');
 }
+
 
 async function assertLandingDoesNotInject() {
   let injected = 0;
@@ -241,6 +246,70 @@ function assertSurgeParserHelpers() {
   assert.equal(r.nodes[0].protocol, 'ss');
 }
 
+async function postJSON(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json;charset=utf-8' },
+    body: JSON.stringify(body),
+  });
+  const json = await resp.json();
+  return { status: resp.status, json };
+}
+
+async function assertAvailabilityRoute() {
+  const baseFake = {
+    isReady: async () => true,
+    lastError: '',
+    getProxyInventory: async () => ({
+      total: 1,
+      nodeCount: 1,
+      nameSet: new Set(['node-a']),
+      nodeNameSet: new Set(['node-a']),
+      normalizedNameMap: new Map([['nodea', 'node-a']]),
+      normalizedNodeNameMap: new Map([['nodea', 'node-a']]),
+    }),
+    findLoadedProxyName: () => ({ found: true, name: 'node-a', candidates: ['node-a'] }),
+    controllerBaseURL: () => 'http://127.0.0.1:19090',
+    delayRequestPath: (name, url) => '/proxies/' + encodeURIComponent(name) + '/delay?url=' + encodeURIComponent(url),
+    testDelay: async (name) => ({ ok: true, alive: true, latency: 22, nodeName: name, requestPath: '/proxies/node-a/delay', requestUrl: 'http://127.0.0.1:19090/proxies/node-a/delay' }),
+  };
+  const server = createSubVizServer({ mihomoManager: baseFake });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    let res = await postJSON(`http://127.0.0.1:${port}/api/availability/check?timeout=500&retries=0`, { node: { name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, timeout: 500, index: 1, total: 1 });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.latency, 22);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+
+  const missingFake = Object.assign({}, baseFake, { findLoadedProxyName: () => ({ found: false, name: 'missing-node', candidates: ['missing-node'] }) });
+  const serverMissing = createSubVizServer({ mihomoManager: missingFake });
+  await new Promise(resolve => serverMissing.listen(0, '127.0.0.1', resolve));
+  try {
+    const port2 = serverMissing.address().port;
+    const res = await postJSON(`http://127.0.0.1:${port2}/api/availability/check?timeout=500&retries=0`, { node: { name: 'missing-node', protocol: 'vmess', server: 'example.com', port: 443 }, timeout: 500, index: 1, total: 1 });
+    assert.equal(res.status, 200, 'missing Mihomo node should not make the API hang or hard-fail');
+    assert.equal(res.json.reason, 'node_not_found_in_mihomo');
+  } finally {
+    await new Promise(resolve => serverMissing.close(resolve));
+  }
+
+  const timeoutFake = Object.assign({}, baseFake, { testDelay: async () => { const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; } });
+  const serverTimeout = createSubVizServer({ mihomoManager: timeoutFake });
+  await new Promise(resolve => serverTimeout.listen(0, '127.0.0.1', resolve));
+  try {
+    const port3 = serverTimeout.address().port;
+    const res = await postJSON(`http://127.0.0.1:${port3}/api/availability/check?timeout=500&retries=0`, { node: { name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, timeout: 500, index: 1, total: 1 });
+    assert.equal(res.status, 502);
+    assert.equal(res.json.category, 'timeout');
+  } finally {
+    await new Promise(resolve => serverTimeout.close(resolve));
+  }
+}
+
 async function assertServerRoutes() {
   const fake = {
     isReady: async () => false,
@@ -310,6 +379,7 @@ function assertStore() {
   assertMihomoMapping();
   await assertAvailability();
   await assertLandingDoesNotInject();
+  await assertAvailabilityRoute();
   await assertAutoUserAgentShortCircuit();
   await assertFixedUserAgentNoFallback();
   await assertHtmlContentTypeSubscriptionStillParses();

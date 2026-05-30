@@ -52,6 +52,26 @@ function sendJSON(res, obj, status = 200) {
   send(res, status, JSON.stringify(obj, null, 2), { 'Content-Type': 'application/json; charset=utf-8' });
 }
 
+
+function availabilityLogSample(index, total) {
+  if (process.env.SUBVIZ_DEBUG === '1' || process.env.SUBVIZ_DEBUG_MIHOMO === '1') return true;
+  index = Number(index || 0);
+  total = Number(total || 0);
+  if (!total) return true;
+  return index <= 3 || index === total || index % 10 === 0;
+}
+
+function logAvailabilityApi(message, meta) {
+  meta = meta || {};
+  if (!availabilityLogSample(meta.index, meta.total)) return;
+  console.log('[subviz:availability:api] ' + message);
+}
+
+function unwrapAvailabilityBody(body) {
+  if (body && typeof body === 'object' && body.node && typeof body.node === 'object') return body.node;
+  return body;
+}
+
 function sendFile(res, file) {
   fs.readFile(file, (err, data) => {
     if (err) return sendJSON(res, { ok: false, error: 'not found' }, 404);
@@ -486,20 +506,28 @@ async function routeAPI(req, res, ctx, url) {
 
   if (req.method === 'POST' && (p === '/api/availability' || p === '/api/availability/check')) {
     const abortController = new AbortController();
-    req.on('aborted', () => abortController.abort());
-    req.on('close', () => { if (!res.writableEnded && req.destroyed) abortController.abort(); });
-    res.on('close', () => { if (!res.writableEnded) abortController.abort(); });
+    let clientAborted = false;
+    req.on('aborted', () => { clientAborted = true; abortController.abort(); });
+    res.on('close', () => { if (!res.writableEnded && clientAborted) abortController.abort(); });
     try {
       const body = parseJSONBody(await readBody(req, 1024 * 1024));
-      if (abortController.signal.aborted) return;
-      const r = await availability.availabilityCheck(body, {
+      const node = unwrapAvailabilityBody(body);
+      const requestIndex = parseInteger(body && body.index, 0, 0, 1000000);
+      const requestTotal = parseInteger(body && body.total, 0, 0, 1000000);
+      const timeout = parseInteger(url.searchParams.get('timeout') || body.timeout || (node && node.timeout), 3000, 200, 30000);
+      const nodeName = clean(node && (node.name || node.rawName || node.originalName)) || '<unnamed>';
+      logAvailabilityApi('check received: node=' + nodeName + ' timeout=' + timeout, { index: requestIndex, total: requestTotal });
+      if (abortController.signal.aborted) return sendJSON(res, { ok: false, cancelled: true, alive: false, category: 'cancelled', shouldCountAsDead: false, error: '测活已取消' }, 499);
+      const r = await availability.availabilityCheck(node, {
         mihomoManager: mihomo,
-        url: url.searchParams.get('url') || body.url,
-        statusExpr: url.searchParams.get('status') || body.status || body.statusExpr,
-        timeout: parseInteger(url.searchParams.get('timeout') || body.timeout, 3000, 200, 30000),
-        retries: parseInteger(url.searchParams.get('retries') || body.retries, 1, 0, 3),
-        retryDelay: parseInteger(url.searchParams.get('retry_delay') || body.retryDelay, 1000, 0, 5000),
+        url: url.searchParams.get('url') || body.url || (node && node.url),
+        statusExpr: url.searchParams.get('status') || body.status || body.statusExpr || (node && (node.status || node.statusExpr)),
+        timeout,
+        retries: parseInteger(url.searchParams.get('retries') || body.retries || (node && node.retries), 1, 0, 3),
+        retryDelay: parseInteger(url.searchParams.get('retry_delay') || body.retryDelay || body.retry_delay || (node && (node.retryDelay || node.retry_delay)), 1000, 0, 5000),
         signal: abortController.signal,
+        requestIndex,
+        requestTotal,
       });
       if (abortController.signal.aborted || (r && r.cancelled)) return sendJSON(res, r || { ok: false, cancelled: true }, 499);
       const statusCode = (r.ok || r.shouldCountAsDead === false) ? 200 : 502;

@@ -42,6 +42,13 @@ async function waitFor(fn, label) {
     await wait(10);
   }
 }
+async function waitForMs(fn, label, maxMs) {
+  const started = Date.now();
+  while (!fn()) {
+    if (Date.now() - started > maxMs) throw new Error('Timed out waiting for ' + label);
+    await wait(10);
+  }
+}
 function parseQuery(url) {
   const out = {};
   const q = String(url || '').split('?')[1] || '';
@@ -136,6 +143,25 @@ async function runClientConcurrency(kind, limit) {
   await waitFor(() => !api.isRunning(), kind + ' completion');
   return { sandbox, maxActive, calls };
 }
+async function runSingleAlive(loadJSONImpl, timeoutValue) {
+  const sandbox = makeClientSandbox();
+  const api = sandbox.window.__svSettingsTest;
+  const ns = nodes(1);
+  api.setData({ ok: true, summary: { total: 1 }, nodes: ns }, allSelected(ns));
+  const els = sandbox.document.__els;
+  els.aliveCon.value = '1';
+  els.aliveTimeout.value = String(timeoutValue || 3000);
+  els.aliveRetries.value = '0';
+  const calls = [];
+  api.setLoadJSON((url, opt) => {
+    calls.push({ url, opt, body: opt && opt.body ? JSON.parse(opt.body) : null });
+    return loadJSONImpl(url, opt);
+  });
+  api.aliveTest();
+  await waitForMs(() => !api.isRunning(), 'single alive completion', Math.max(3500, Number(timeoutValue || 3000) + 2600));
+  return { sandbox, api, calls, node: ns[0] };
+}
+
 function requestBundle(pathname, options) {
   options = options || {};
   const captured = [];
@@ -178,6 +204,18 @@ function jsonResponse(r) { return JSON.parse(r.response.body || '{}'); }
   assert(q.url === 'https://example.com/custom_204', 'alive URL should use latest UI value');
   assert(q.status === '200,204', 'alive status codes should use latest UI value');
   assert(q.retry_delay === '123', 'alive retry delay should use latest UI value');
+  assert(r.calls[0].indexOf('/api/availability/check') === 0, 'alive must call /api/availability/check, got ' + r.calls[0]);
+
+  let one = await runSingleAlive(() => Promise.resolve({ ok: true, alive: true, latency: 9, status: 204 }), 1000);
+  assert(one.calls.length === 1 && one.calls[0].url.indexOf('/api/availability/check') === 0, 'single alive should dispatch /api/availability/check');
+  assert(one.calls[0].body && one.calls[0].body.node && one.calls[0].body.timeout === 1000 && one.calls[0].body.index === 1 && one.calls[0].body.total === 1, 'single alive request body should include node/timeout/index/total');
+  assert(one.node.aliveOK === true && one.sandbox.window.__svSettingsTest.getStatuses().some(s => /测活中 1 \/ 1/.test(s)), 'single alive success should advance completed from 0 to 1');
+
+  one = await runSingleAlive(() => Promise.resolve({ ok: false, alive: false, error: 'node_not_found_in_mihomo' }), 1000);
+  assert(one.node.aliveOK === false && /测活完成 1 \/ 1/.test(one.sandbox.window.__lastStatus), 'single alive failure should also advance completed from 0 to 1');
+
+  one = await runSingleAlive(() => new Promise(() => {}), 200);
+  assert(one.node.aliveOK === false && /请求超时/.test(one.node.aliveError || '') && /测活完成 1 \/ 1/.test(one.sandbox.window.__lastStatus), 'single alive frontend timeout should also advance completed from 0 to 1');
 
   r = await runClientConcurrency('alive', 3);
   assert(r.maxActive === 3, 'button-bound alive concurrency=3 should run 3 at most, got ' + r.maxActive);
