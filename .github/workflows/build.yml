@@ -137,9 +137,8 @@ jobs:
 
           source_note=''
 
-          if [[ -f .github/release-notes.md && -s .github/release-notes.md ]]; then
-            cp .github/release-notes.md release-notes.md
-            source_note='.github/release-notes.md'
+          if [[ -f release-notes.md && -s release-notes.md ]]; then
+            source_note='release-notes.md'
           else
             {
               echo "## 本次修复 / 更新"
