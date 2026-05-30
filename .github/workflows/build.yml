@@ -5,6 +5,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      version:
+        description: '可选：手动指定版本号，例如 v1.0.6；留空则自动递增 patch 版本。'
+        required: false
+        default: ''
+      release_notes:
+        description: '可选：手动补充发布说明；留空则自动读取本次提交信息。'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -32,41 +41,147 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Resolve release version
+      - name: Resolve next release version
         id: meta
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
 
-          if [[ -f RELEASE_VERSION.txt ]]; then
-            raw_version="$(tr -d '[:space:]' < RELEASE_VERSION.txt)"
+          git fetch --force --tags origin
+
+          normalize_tag() {
+            local value="$1"
+            value="${value//[[:space:]]/}"
+            if [[ -z "$value" ]]; then
+              echo ''
+              return 0
+            fi
+            if [[ "$value" != v* ]]; then
+              value="v${value}"
+            fi
+            if [[ ! "$value" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::版本号格式不正确：${value}。请使用类似 v1.0.5 的三段版本号。" >&2
+              exit 1
+            fi
+            echo "$value"
+          }
+
+          latest_tag="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          forced_tag="$(normalize_tag "${VERSION_INPUT:-}")"
+
+          if [[ -n "$forced_tag" ]]; then
+            next_tag="$forced_tag"
           else
-            raw_version="$(node -p "require('./package.json').version")"
+            if [[ -n "$latest_tag" ]]; then
+              base="${latest_tag#v}"
+            elif [[ -f RELEASE_VERSION.txt && -s RELEASE_VERSION.txt ]]; then
+              base="$(tr -d '[:space:]' < RELEASE_VERSION.txt)"
+              base="${base#v}"
+            else
+              base="$(node -p "require('./package.json').version")"
+              base="${base#v}"
+            fi
+
+            if [[ ! "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::无法从 ${base} 自动递增版本。请在 workflow_dispatch 里手动指定 v1.0.5 这类版本。"
+              exit 1
+            fi
+
+            IFS='.' read -r major minor patch <<< "$base"
+            patch=$((patch + 1))
+            next_tag="v${major}.${minor}.${patch}"
+
+            while git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; do
+              patch=$((patch + 1))
+              next_tag="v${major}.${minor}.${patch}"
+            done
           fi
 
-          if [[ -z "$raw_version" ]]; then
-            echo '::error::RELEASE_VERSION.txt 为空，请填写类似 1.0.5 的版本号。'
+          if git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; then
+            echo "::error::Tag ${next_tag} 已存在。请删除旧 Tag，或手动指定更高版本。"
             exit 1
           fi
 
-          if [[ "$raw_version" == v* ]]; then
-            tag="$raw_version"
-          else
-            tag="v$raw_version"
-          fi
+          version="${next_tag#v}"
+          zip_name="SubViz-windows-x64-${next_tag}.zip"
 
-          if [[ ! "$tag" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
-            echo "::error::版本号格式不正确：$tag。请使用类似 v1.0.5 的格式。"
-            exit 1
-          fi
+          echo "previous_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          echo "tag=${next_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
 
-          zip_name="SubViz-windows-x64-${tag}.zip"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
-          echo "release tag: $tag"
-          echo "zip name: $zip_name"
+          echo "previous tag: ${latest_tag:-none}"
+          echo "release tag: ${next_tag}"
+          echo "release version: ${version}"
+          echo "zip name: ${zip_name}"
 
       - name: Run tests
         run: npm test
+
+      - name: Generate release notes
+        id: notes
+        env:
+          PREVIOUS_TAG: ${{ steps.meta.outputs.previous_tag }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+          MANUAL_NOTES: ${{ github.event.inputs.release_notes }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${PREVIOUS_TAG:-}" ]]; then
+            range="${PREVIOUS_TAG}..HEAD"
+          else
+            range="HEAD"
+          fi
+
+          source_note=''
+
+          if [[ -f .github/release-notes.md && -s .github/release-notes.md ]]; then
+            cp .github/release-notes.md release-notes.md
+            source_note='.github/release-notes.md'
+          else
+            {
+              echo "## 本次修复 / 更新"
+              echo
+
+              if [[ -n "${MANUAL_NOTES:-}" ]]; then
+                printf '%s\n' "$MANUAL_NOTES"
+                echo
+                source_note='workflow_dispatch.release_notes'
+              fi
+
+              if git log --no-merges --format='%s' "$range" | grep -q .; then
+                git log --no-merges --reverse --format='- %s%n%b' "$range" \
+                  | sed '/^[[:space:]]*$/d'
+                if [[ -z "$source_note" ]]; then
+                  source_note='git log'
+                fi
+              else
+                echo "- 自动构建 ${RELEASE_TAG}。"
+                if [[ -z "$source_note" ]]; then
+                  source_note='default'
+                fi
+              fi
+            } > release-notes.md
+          fi
+
+          {
+            echo
+            echo "## 构建信息"
+            if [[ -n "${PREVIOUS_TAG:-}" ]]; then
+              echo "- 上一版本：${PREVIOUS_TAG}"
+            else
+              echo "- 上一版本：无"
+            fi
+            echo "- 当前版本：${RELEASE_TAG}"
+            echo "- 构建提交：${GITHUB_SHA::7}"
+            echo "- 构建时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "- 发布说明来源：${source_note:-unknown}"
+          } >> release-notes.md
+
+          echo 'release notes preview:'
+          sed -n '1,160p' release-notes.md
 
       - name: Download Node.js portable
         run: |
@@ -96,6 +211,8 @@ jobs:
           test -f dist/mihomo/mihomo.exe
 
       - name: Assemble release package
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist/lib dist/public dist/data dist/mihomo dist/src dist/tools dist/test
@@ -112,6 +229,15 @@ jobs:
           if [[ -d data ]]; then cp -r data/. dist/data/; fi
           if [[ -d test ]]; then cp -r test/. dist/test/; fi
           touch dist/data/.gitkeep
+
+          printf '%s\n' "$RELEASE_VERSION" > dist/RELEASE_VERSION.txt
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkgPath = 'dist/package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.version = process.env.RELEASE_VERSION;
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
 
           echo 'dist layout preview:'
           find dist -maxdepth 3 -type f | sort | sed -n '1,160p'
@@ -131,23 +257,18 @@ jobs:
           name: SubViz-windows-x64-${{ steps.meta.outputs.tag }}
           path: ${{ steps.meta.outputs.zip_name }}
 
-      - name: Create tag when missing
+      - name: Create release tag
         run: |
           set -euo pipefail
           tag='${{ steps.meta.outputs.tag }}'
 
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "tag ${tag} already exists, keep it unchanged."
-            exit 0
-          fi
-
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag "$tag" "$GITHUB_SHA"
+          git tag -a "$tag" -m "SubViz ${tag}"
           git push origin "refs/tags/${tag}"
           echo "created tag ${tag} at ${GITHUB_SHA}"
 
-      - name: Create or update GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -155,11 +276,7 @@ jobs:
           tag='${{ steps.meta.outputs.tag }}'
           zip_name='${{ steps.meta.outputs.zip_name }}'
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release ${tag} already exists, uploading asset with --clobber."
-            gh release upload "$tag" "$zip_name" --clobber
-          else
-            gh release create "$tag" "$zip_name" \
-              --title "SubViz ${tag}" \
-              --notes "自动构建版本 ${tag}。"
-          fi
+          gh release create "$tag" "$zip_name" \
+            --title "SubViz ${tag}" \
+            --notes-file release-notes.md \
+            --latest
