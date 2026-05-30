@@ -53,11 +53,24 @@ function assertMihomoMapping() {
   assert(yaml.includes('mixed-port: 17890'));
   assert(yaml.includes('socks-port: 17891'));
   assert(yaml.includes('port: 17892'));
-  assert(yaml.includes('external-controller: 127.0.0.1:19090'));
+  assert(yaml.includes('external-controller: "127.0.0.1:19090"'));
   assert(yaml.includes('name: "dup (2)"'));
-  assert(yaml.includes('MATCH,subviz-select'));
+  assert(yaml.includes('"MATCH,subviz-select"'));
   assert(!yaml.includes('MATCH,DIRECT'));
   assert(!yaml.includes('port: 7890'));
+
+  const tmpReserved = fs.mkdtempSync(path.join(os.tmpdir(), 'subviz-mihomo-yaml-'));
+  const mReserved = new MihomoManager({ configDir: tmpReserved, disabled: true });
+  mReserved.writeConfig([
+    { name: '@reserved-name', protocol: 'ss', server: '2.2.2.2', port: '443', extra: { cipher: 'aes-128-gcm', password: '@reserved-password' }, fingerprint: 'reserved' },
+  ]);
+  const yamlReserved = fs.readFileSync(path.join(tmpReserved, 'config.yaml'), 'utf8');
+  assert(yamlReserved.includes('name: "@reserved-name"'), 'YAML reserved @ at start of name must be quoted');
+  assert(yamlReserved.includes('password: "@reserved-password"'), 'YAML reserved @ at start of password must be quoted');
+
+  const hysteria = nodeToMihomoProxy({ name: 'HY 01', protocol: 'hysteria', server: 'hy.example.com', port: '443', extra: { auth: 'secret', obfs: 'xplus', sni: 'sni.example.com' } });
+  assert.equal(hysteria.type, 'hysteria');
+  assert.equal(hysteria['auth-str'], 'secret');
 }
 
 async function assertAvailability() {
