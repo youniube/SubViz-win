@@ -1,18 +1,22 @@
 ## 本次修复 / 更新
 
-- GitHub Actions 发布流程现在优先读取 `.github/release-notes.md` 作为 GitHub Release 发布说明。
-- 保留自动递增 Tag 逻辑：例如 `v1.0.4 → v1.0.5 → v1.0.6`。
-- 保留自动构建 Windows x64 发布包、自动创建 Git Tag、自动创建 GitHub Release、自动标记 Latest。
-- 当 `.github/release-notes.md` 不存在或为空时，发布流程会自动回退到手动输入的说明或 Git 提交记录。
-- 后续 AI 修复项目时，只要同步更新 `.github/release-notes.md`，发布说明就会自动带入 Releases 页面。
+- 修复订阅拉取时把 `Content-Type: text/html` 直接判定为 HTML 错误页的问题。
+- 现在会优先根据响应正文判断是否真的是 HTML / 登录页 / 错误页；如果正文能解析出节点，即使服务端错误返回 `text/html`，也会按有效订阅处理。
+- 修复因此导致的 Clash.Meta / Shadowrocket 等客户端 UA 明明返回有效订阅内容，却在自动重试里被误判为“内容疑似 HTML 页面”的问题。
+- 保留自动 UA 短路逻辑：命中第一个可解析出节点的 UA 后立即停止，不继续请求后续 UA。
+- 保留固定 UA 逻辑：手动选择 Clash.Meta、Shadowrocket 等客户端时只请求一次，不自动 fallback。
 
 ## 影响文件
 
-- `.github/workflows/build.yml`
+- `server.js`
+- `subviz.js`
+- `tools/node-app-test.js`
 - `.github/release-notes.md`
 
 ## 测试结果
 
-- 已检查 workflow 会优先读取 `.github/release-notes.md`。
-- 已检查 release 创建命令继续使用 `--notes-file release-notes.md`。
-- 本次只修改 GitHub Actions 发布流程和发布说明模板，不涉及 SubViz 运行时代码。
+- `npm test` 通过。
+- `npm run check` 通过。
+- 新增回归测试：有效订阅正文即使响应头是 `Content-Type: text/html`，也必须正常解析节点。
+- 已验证自动 UA 模式仍会在 Clash.Meta 命中后停止，不继续请求 Shadowrocket。
+- 已验证固定 UA 模式仍只请求所选客户端一次。
