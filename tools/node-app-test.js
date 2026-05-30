@@ -72,15 +72,17 @@ async function assertAvailability() {
     findLoadedProxyName: () => ({ found: true, name: 'node-a', candidates: ['node-a'] }),
     controllerBaseURL: () => 'http://127.0.0.1:19090',
     delayRequestPath: (name, url) => '/proxies/' + encodeURIComponent(name) + '/delay?url=' + encodeURIComponent(url),
-    requestViaNode: async () => ({ status: 204, latency: 12, body: '' }),
+    testDelay: async (name, url, timeout) => ({ ok: true, alive: true, latency: 12, nodeName: name, requestUrl: 'http://127.0.0.1:19090/proxies/node-a/delay', requestPath: '/proxies/node-a/delay', timeout }),
+    requestViaNode: async () => { throw new Error('availabilityCheck should use Mihomo /delay for per-node concurrent progress'); },
   };
   const ok = await availabilityCheck({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: fake, statusExpr: '204' });
   assert.equal(ok.ok, true);
   assert.equal(ok.status, 204);
-  const badFake = Object.assign({}, fake, { requestViaNode: async () => ({ status: 200, latency: 12, body: '' }) });
-  const bad = await availabilityCheck({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: badFake, statusExpr: '204', retries: 0 });
+  assert.equal(ok.latency, 12);
+  const failFake = Object.assign({}, fake, { testDelay: async () => { const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; } });
+  const bad = await availabilityCheck({ name: 'node-a', protocol: 'vmess', server: 'example.com', port: 443 }, { mihomoManager: failFake, statusExpr: '204', retries: 0 });
   assert.equal(bad.ok, false);
-  assert.equal(bad.category, 'bad_status');
+  assert.equal(bad.category, 'timeout');
 }
 
 async function assertLandingDoesNotInject() {
