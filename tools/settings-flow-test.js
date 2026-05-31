@@ -198,7 +198,7 @@ function jsonResponse(r) { return JSON.parse(r.response.body || '{}'); }
   assert(r.sandbox.window.__svSettingsTest.getStatuses().some(s => /测活中 0 \/ 12/.test(s)), 'alive should render initial 0 / 12 progress immediately');
   assert(r.sandbox.window.__svSettingsTest.getStatuses().some(s => /测活中 1 \/ 12/.test(s)), 'alive progress should advance from 0 / 12 to 1 / 12');
   assert(/测活完成 12 \/ 12/.test(r.sandbox.window.__lastStatus), 'alive final status should show completed / total: ' + r.sandbox.window.__lastStatus);
-  assert(r.sandbox.window.__svSettingsTest.getAliveButtonText() === '开始测活', 'alive button should restore to 开始测活 after completion');
+  assert(r.sandbox.window.__svSettingsTest.getAliveButtonText() === '测活开始', 'alive button should restore to 测活开始 after completion');
   let q = parseQuery(r.calls[0]);
   assert(q.timeout === '1000', 'alive timeout should be sent as 1000ms');
   assert(q.url === 'https://example.com/custom_204', 'alive URL should use latest UI value');
